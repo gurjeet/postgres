@@ -35,6 +35,7 @@ extern void DefineIndex(RangeVar *heapRelation,
 			bool is_alter_table,
 			bool check_rights,
 			bool skip_build,
+			bool index_exists,
 			bool quiet,
 			bool concurrent);
 extern void ReindexIndex(RangeVar *indexRelation);

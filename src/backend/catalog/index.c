@@ -512,6 +512,7 @@ UpdateIndexRelation(Oid indexoid,
  * allow_system_table_mods: allow table to be a system catalog
  * skip_build: true to skip the index_build() step for the moment; caller
  *		must do it later (typically via reindex_index())
+ * index_exists: the index already exists, we are here just for formalities.
  * concurrent: if true, do not lock the table against writers.	The index
  *		will be marked "invalid" and the caller must take additional steps
  *		to fix it up.
@@ -535,6 +536,7 @@ index_create(Oid heapRelationId,
 			 bool initdeferred,
 			 bool allow_system_table_mods,
 			 bool skip_build,
+			 bool index_exists,
 			 bool concurrent)
 {
 	Relation	pg_class;
@@ -615,6 +617,7 @@ index_create(Oid heapRelationId,
 	if (shared_relation && tableSpaceId != GLOBALTABLESPACE_OID)
 		elog(ERROR, "shared relations must be placed in pg_global tablespace");
 
+	if (!index_exists)
 	if (get_relname_relid(indexRelationName, namespaceId))
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_TABLE),
@@ -653,6 +656,17 @@ index_create(Oid heapRelationId,
 		}
 	}
 
+	if (index_exists)
+	{
+		Assert( skip_build && !IsBootstrapProcessingMode() );
+
+		indexRelation = relation_open(indexRelationId, AccessExclusiveLock);
+
+		/* done with pg_class */
+		heap_close(pg_class, RowExclusiveLock);
+	}
+	else
+	{
 	/*
 	 * create the index relation's relcache entry and physical disk file. (If
 	 * we fail further down, it's the smgr's responsibility to remove the disk
@@ -725,6 +739,7 @@ index_create(Oid heapRelationId,
 						classObjectId, coloptions, isprimary,
 						!deferrable,
 						!concurrent);
+	}
 
 	/*
 	 * Register constraint and dependencies for the index.
@@ -838,7 +853,7 @@ index_create(Oid heapRelationId,
 									 true);
 			}
 		}
-		else
+		else if(!index_exists)
 		{
 			bool		have_simple_col = false;
 
@@ -881,6 +896,8 @@ index_create(Oid heapRelationId,
 			Assert(!initdeferred);
 		}
 
+		if (!index_exists)
+		{
 		/* Store dependency on operator classes */
 		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
 		{
@@ -909,6 +926,7 @@ index_create(Oid heapRelationId,
 											heapRelationId,
 											DEPENDENCY_NORMAL,
 											DEPENDENCY_AUTO);
+		}
 		}
 	}
 	else
@@ -950,6 +968,8 @@ index_create(Oid heapRelationId,
 	}
 	else if (skip_build)
 	{
+		if (!index_exists)
+		{
 		/*
 		 * Caller is responsible for filling the index later on.  However,
 		 * we'd better make sure that the heap relation is correctly marked as
@@ -963,6 +983,7 @@ index_create(Oid heapRelationId,
 						   heapRelation->rd_rel->reltuples);
 		/* Make the above update visible */
 		CommandCounterIncrement();
+		}
 	}
 	else
 	{

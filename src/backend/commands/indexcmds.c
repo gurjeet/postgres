@@ -69,7 +69,9 @@ static void ComputeIndexAttrs(IndexInfo *indexInfo,
 static Oid GetIndexOpClass(List *opclass, Oid attrType,
 				char *accessMethodName, Oid accessMethodId);
 static char *ChooseIndexNameAddition(List *colnames);
-static bool relationHasPrimaryKey(Relation rel);
+
+/* TODO: Unable to figure out which header to declare this in */
+Oid relationHasPrimaryKey(Relation rel);
 
 
 /*
@@ -122,6 +124,7 @@ DefineIndex(RangeVar *heapRelation,
 			bool is_alter_table,
 			bool check_rights,
 			bool skip_build,
+			bool index_exists,
 			bool quiet,
 			bool concurrent)
 {
@@ -335,7 +338,7 @@ DefineIndex(RangeVar *heapRelation,
 		 * it's no problem either.
 		 */
 		if (is_alter_table &&
-			relationHasPrimaryKey(rel))
+			relationHasPrimaryKey(rel) != InvalidOid)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
@@ -483,6 +486,7 @@ DefineIndex(RangeVar *heapRelation,
 					 isconstraint, deferrable, initdeferred,
 					 allowSystemTableMods,
 					 skip_build || concurrent,
+					 index_exists,
 					 concurrent);
 
 	if (!concurrent)
@@ -1536,10 +1540,11 @@ ChooseIndexColumnNames(List *indexElems)
  *
  *	See whether an existing relation has a primary key.
  */
-static bool
+Oid
 relationHasPrimaryKey(Relation rel)
 {
-	bool		result = false;
+	Oid			indexoid = InvalidOid;
+	bool		isprimary = false;
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 
@@ -1552,21 +1557,22 @@ relationHasPrimaryKey(Relation rel)
 
 	foreach(indexoidscan, indexoidlist)
 	{
-		Oid			indexoid = lfirst_oid(indexoidscan);
 		HeapTuple	indexTuple;
+
+		indexoid = lfirst_oid(indexoidscan);
 
 		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
 		if (!HeapTupleIsValid(indexTuple))		/* should not happen */
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
-		result = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
+		isprimary = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
 		ReleaseSysCache(indexTuple);
-		if (result)
+		if (isprimary)
 			break;
 	}
 
 	list_free(indexoidlist);
 
-	return result;
+	return isprimary ? indexoid : InvalidOid;
 }
 
 /*

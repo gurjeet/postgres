@@ -903,6 +903,7 @@ standard_ProcessUtility(Node *parsetree,
 							false,		/* is_alter_table */
 							true,		/* check_rights */
 							false,		/* skip_build */
+							false,		/* index_exists */
 							false,		/* quiet */
 							stmt->concurrent);	/* concurrent */
 			}

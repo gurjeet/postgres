@@ -4814,6 +4814,8 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	bool		check_rights;
 	bool		skip_build;
 	bool		quiet;
+	Oid			index_oid = InvalidOid;
+	ListCell	*l, *prev = NULL;
 
 	Assert(IsA(stmt, IndexStmt));
 
@@ -4824,11 +4826,38 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	/* suppress notices when rebuilding existing index */
 	quiet = is_rebuild;
 
+	/* If we have the WITH INDEX option set, use that index for this primary key */
+	if (stmt->primary)
+	foreach(l, stmt->options)
+	{
+		DefElem	*def = (DefElem*)lfirst(l);
+
+		if (!(def->defnamespace == NULL && 0 == strcmp(def->defname, "index")))
+		{
+			prev = l;
+			continue;
+		}
+
+		Assert(strspn(strVal(def->arg), "0123456789") == strlen(strVal(def->arg)));
+
+		index_oid = DatumGetObjectId(DirectFunctionCall1(oidin,
+										CStringGetDatum(strVal(def->arg))));
+
+		/* We override the params set above */
+		skip_build = true;
+		quiet = true; /* We don't want the 'will create implicit index' message */
+
+		break;
+	}
+
+	if (l) /* unecessary check, but good for readability */
+		stmt->options = list_delete_cell(stmt->options, l, prev);
+
 	/* The IndexStmt has already been through transformIndexStmt */
 
 	DefineIndex(stmt->relation, /* relation */
 				stmt->idxname,	/* index name */
-				InvalidOid,		/* no predefined OID */
+				index_oid,		/* predefined OID, if any */
 				stmt->accessMethod,		/* am name */
 				stmt->tableSpace,
 				stmt->indexParams,		/* parameters */
@@ -4843,9 +4872,36 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 				true,			/* is_alter_table */
 				check_rights,
 				skip_build,
+				index_oid != InvalidOid,
 				quiet,
 				false);
+
+	/* Now update pg_index tuple to mark this index as indisprimary */
+	if (stmt->primary && index_oid != InvalidOid)
+	{
+		Relation	pg_index;
+		HeapTuple	indexTuple;
+		Form_pg_index indexForm;
+
+		pg_index = heap_open(IndexRelationId, RowExclusiveLock);
+
+		indexTuple = SearchSysCacheCopy1(INDEXRELID,
+										 ObjectIdGetDatum(index_oid));
+		if (!HeapTupleIsValid(indexTuple))
+			elog(ERROR, "cache lookup failed for index %u", index_oid);
+		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+
+		indexForm->indisprimary = true;
+		simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
+		CatalogUpdateIndexes(pg_index, indexTuple);
+
+		heap_freetuple(indexTuple);
+		heap_close(pg_index, RowExclusiveLock);
+
+		CommandCounterIncrement();
+	}
 }
+
 
 /*
  * ALTER TABLE ADD CONSTRAINT

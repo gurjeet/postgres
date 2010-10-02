@@ -44,6 +44,7 @@ extern Oid index_create(Oid heapRelationId,
 			 bool initdeferred,
 			 bool allow_system_table_mods,
 			 bool skip_build,
+			 bool index_exists,
 			 bool concurrent);
 
 extern void index_drop(Oid indexId);
