@@ -124,6 +124,7 @@ static void transformConstraintAttrs(ParseState *pstate, List *constraintList);
 static void transformColumnType(ParseState *pstate, ColumnDef *column);
 static void setSchemaName(char *context_schema, char **stmt_schema_name);
 
+static void replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds);
 
 /*
  * transformCreateStmt -
@@ -1918,26 +1919,22 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
  * If the PRIMARY KEY clasue has WITH INDEX option set, then prepare to use
  * that index as the primary key.
  */
-static AlterTableCmd *
-replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
+void
+replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 {
 	ListCell *l;
 	Oid	index_oid = InvalidOid;	/* Oid of the index to create/replace primary key with */
-
-	AlterTableCmd *at_cmd = NULL;
 
 	foreach(l, pkey->options)
 	{
 		DefElem		*def = (DefElem*)lfirst(l);
 
-		int2	i;	/* loop iterator for small loops */
+		int2	i;	/* iterator for small loops */
 		Oid		pkey_oid;
-		char	*index_name;
-		char	*oid_string;
-		List	*index_name_list;
+		char   *index_name;
+		char   *oid_string;
 
-		ListCell		*cell;
-		RangeVar		*index_rv;
+		ListCell	   *cell;
 		Relation		index_rel;
 		HeapTuple		index_tuple;
 		Form_pg_index	index_form;
@@ -1945,7 +1942,8 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 		if (def->defnamespace == NULL && 0 == strcmp(def->defname, "index"))
 		{
 			if (!(def->defaction == DEFELEM_UNSPEC || def->defaction == DEFELEM_SET))
-				elog(ERROR, "syntax error in PRIMARY KEY clause" );
+				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
+								errmsg("syntax error in PRIMARY KEY clause")));
 		}
 		else
 			continue;
@@ -1954,21 +1952,26 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 		 * If we don't do this, WITH INDEX option will reach DefineIndex(), and
 		 * it will throw a fit.
 		 */
-		if (index_oid != InvalidOid)
+		if (OidIsValid(index_oid))
 			elog(ERROR, "only one WITH INDEX option can be specified for a primary key");
 
 		if (!IsA(def->arg, String))
-			elog(ERROR, "WITH INDEX option for primary key should be a string value");
+				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
+								errmsg("syntax error"),
+								errdetail("WITH INDEX option for primary key should be a string value")));
 
 		index_name = strVal(def->arg);
 
-		index_name_list = stringToQualifiedNameList(index_name);
+		/* Look for the index in the same schema as the table */
+		index_oid = get_relname_relid(index_name, RelationGetNamespace(rel));
 
-		/* TODO: Should we assert that this is not a qualified name? */
-		index_rv = makeRangeVarFromNameList(index_name_list);
+		if (!OidIsValid(index_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_TABLE),
+					 errmsg("relation \"%s\" does not exist",
+							index_name)));
 
-		index_oid = RangeVarGetRelid(index_rv, false);
-
+		/* This will throw an error if it is not an index */
 		index_rel = index_open(index_oid, AccessExclusiveLock);
 
 		oid_string = DatumGetCString(DirectFunctionCall1(oidout,
@@ -1981,9 +1984,9 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 		def->arg = (Node*)makeString(oid_string);
 
 		/* set index name in the statement, to affect the constraint name */
-		pkey->idxname = pstrdup(strVal(llast(index_name_list)));
+		pkey->idxname = pstrdup(index_name);
 
-		/* Perform some checks on the index, for validity */
+		/* Perform validity checks on the index */
 
 		index_tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
 		if (!HeapTupleIsValid(index_tuple))
@@ -1991,26 +1994,39 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 		index_form = (Form_pg_index) GETSTRUCT(index_tuple);
 
 		if (!index_form->indisvalid)
-			elog(ERROR, "index is not valid");
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("index \"%s\" is not valid", index_name)));
 
 		if (!index_form->indisready)
-			elog(ERROR, "index is not ready");
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("index \"%s\" is not ready", index_name)));
 
 		if (index_form->indrelid != RelationGetRelid(rel))
 			elog(ERROR, "index is not on this table");
 
 		if (!index_form->indisunique)
-			elog(ERROR, "primary key on a non-unique index is not allowed");
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("\"%s\" is not a unique index", index_name),
+					errdetail("cannot create primary key using a non-unique index.")));
 
 		if (index_rel->rd_indextuple != NULL &&
 			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indexprs))
-			elog(ERROR, "primary key on an expression index is not allowed");
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("index \"%s\" contains expressions", index_name),
+					errdetail("cannot create primary key using an expression index.")));
 
 		if (index_rel->rd_indextuple != NULL &&
 			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indpred))
-			elog(ERROR, "primary key on a partial index is not allowed");
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("\"%s\" is a partial index", index_name),
+					errdetail("cannot create primary key using a partial index.")));
 
-		/* Match the PRIMARY KEY clasue from the ALTER statement, to the index */
+		/* Match the PRIMARY KEY clasue from the ALTER statement, with the index */
 
 		if (index_form->indnatts != list_length(pkey->indexParams))
 			elog(ERROR, "primary key definition does not match the index");
@@ -2025,9 +2041,12 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 
 			if (elem->name == NULL)
 			{
-				/* Grammar already prevents this by throwing a syntax error. */
+				/* Grammar already prevents this by disallowing expressions. */
 				Assert(elem->expr != NULL);
-				elog(ERROR,"primary key on expressions is not supported");
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("PRIMARY KEY clause contains expressions"),
+						errdetail("cannot create primary key using an expression index.")));
 			}
 
 			attTuple = SearchSysCache2(ATTNUM,
@@ -2046,19 +2065,20 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 			++i;
 		}
 
-		pkey_oid = relationHasPrimaryKey(rel);
+		pkey_oid = getRelationPrimaryKey(rel);
 
-		if (pkey_oid != InvalidOid)
+		if (OidIsValid(pkey_oid))
 		{
+			Relation		pkey_rel;
 			HeapTuple		pkey_tuple;
 			Form_pg_index	pkey_form;
-			Relation		pkey_rel;
+			AlterTableCmd  *at_cmd = NULL;
 
 			pkey_rel = index_open(pkey_oid, AccessExclusiveLock);
 
 			/*
 			 * Check pg_class->relam to see if the index type match. As of now, only
-			 * BTree indexes are used to implement primary keys, but it doesn't hurt
+			 * B-Tree indexes are used to implement primary keys, but it doesn't hurt
 			 * to be future proof.
 			 */
 			if (pkey_rel->rd_rel->relam != index_rel->rd_rel->relam)
@@ -2105,7 +2125,13 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 			at_cmd->subtype = AT_DropConstraint;
 			at_cmd->name = pstrdup(RelationGetRelationName(pkey_rel));
 			at_cmd->behavior = DROP_CASCADE;;
+			/*
+			 * Set missingok so that this wouldn't fail if the ALTER TABLE
+			 * already has a DROP CONSTRAINT clause for the primary key.
+			 */
 			at_cmd->missing_ok = true;
+
+			*newcmds = lappend(*newcmds, at_cmd);
 
 			/* close the pkey handle but keep the lock */
 			relation_close(pkey_rel, NoLock);
@@ -2118,7 +2144,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 			 */
 
 			if (index_rel->rd_rel->relam != BTREE_AM_OID)
-				elog(ERROR, "primary key using non-BTree indexes is not supported");
+				elog(ERROR, "\"%s\" is not a B-Tree index", index_name);
 
 			/* We have already checked above that this is a unique index */
 		}
@@ -2131,8 +2157,6 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey)
 		 * multiple 'WITH INDEX' clauses
 		 */
 	}
-
-	return at_cmd;
 }
 
 /*
@@ -2280,12 +2304,7 @@ transformAlterTableStmt(AlterTableStmt *stmt, const char *queryString)
 	transformFKConstraints(pstate, &cxt, skipValidation, true);
 
 	if (cxt.pkey && cxt.pkey->options)
-	{
-		AlterTableCmd *drop_pkey = replacePrimaryKeyIndex(rel, cxt.pkey);
-
-		if (drop_pkey != NULL)
-			newcmds = lappend(newcmds, drop_pkey);
-	}
+		replacePrimaryKeyIndex(rel, cxt.pkey, &newcmds);
 
 	/*
 	 * Push any index-creation commands into the ALTER, so that they can be

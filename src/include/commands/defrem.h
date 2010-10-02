@@ -15,6 +15,7 @@
 #define DEFREM_H
 
 #include "nodes/parsenodes.h"
+#include "utils/relcache.h"
 
 
 /* commands/indexcmds.c */
@@ -51,6 +52,7 @@ extern char *ChooseIndexName(const char *tabname, Oid namespaceId,
 				bool primary, bool isconstraint);
 extern List *ChooseIndexColumnNames(List *indexElems);
 extern Oid	GetDefaultOpClass(Oid type_id, Oid am_id);
+extern Oid getRelationPrimaryKey(Relation rel);
 
 /* commands/functioncmds.c */
 extern void CreateFunction(CreateFunctionStmt *stmt, const char *queryString);

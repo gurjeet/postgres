@@ -4815,7 +4815,8 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	bool		skip_build;
 	bool		quiet;
 	Oid			index_oid = InvalidOid;
-	ListCell	*l, *prev = NULL;
+	ListCell   *l = NULL;
+	ListCell   *prev = NULL;
 
 	Assert(IsA(stmt, IndexStmt));
 

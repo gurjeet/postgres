@@ -70,10 +70,6 @@ static Oid GetIndexOpClass(List *opclass, Oid attrType,
 				char *accessMethodName, Oid accessMethodId);
 static char *ChooseIndexNameAddition(List *colnames);
 
-/* TODO: Unable to figure out which header to declare this in */
-Oid relationHasPrimaryKey(Relation rel);
-
-
 /*
  * DefineIndex
  *		Creates a new index.
@@ -337,8 +333,7 @@ DefineIndex(RangeVar *heapRelation,
 		 * clauses; and CREATE INDEX doesn't have a way to say PRIMARY KEY, so
 		 * it's no problem either.
 		 */
-		if (is_alter_table &&
-			relationHasPrimaryKey(rel) != InvalidOid)
+		if (is_alter_table && OidIsValid(getRelationPrimaryKey(rel)))
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
@@ -1536,12 +1531,12 @@ ChooseIndexColumnNames(List *indexElems)
 }
 
 /*
- * relationHasPrimaryKey -
+ * getRelationPrimaryKey -
  *
  *	See whether an existing relation has a primary key.
  */
 Oid
-relationHasPrimaryKey(Relation rel)
+getRelationPrimaryKey(Relation rel)
 {
 	Oid			indexoid = InvalidOid;
 	bool		isprimary = false;
