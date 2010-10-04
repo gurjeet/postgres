@@ -4848,6 +4848,20 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 		skip_build = true;
 		quiet = true; /* We don't want the 'will create implicit index' message */
 
+		/*
+		 * Now we rename the index to have the same name as the constraint. We
+		 * do this for 2 reasons: one, rest of the source code maintains this
+		 * consistency between names of a constraint and its index. Two, this
+		 * allows us to catch the situation where this index is already
+		 * associated with another constraint; so, when the following API tries
+		 * to rename the constraint associated with this index, it'll fail,
+		 * complaining that there is already a constraint by the same name,
+		 * which in our case is the primary key we just created above.
+		 */
+		CommandCounterIncrement();
+
+		RenameRelation(index_oid, stmt->idxname, OBJECT_INDEX);
+
 		break;
 	}
 
@@ -4878,11 +4892,11 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 				false);
 
 	/* Now update pg_index tuple to mark this index as indisprimary */
-	if (stmt->primary && index_oid != InvalidOid)
+	if (stmt->primary && OidIsValid(index_oid))
 	{
-		Relation	pg_index;
-		HeapTuple	indexTuple;
-		Form_pg_index indexForm;
+		Relation		pg_index;
+		HeapTuple		indexTuple;
+		Form_pg_index	indexForm;
 
 		pg_index = heap_open(IndexRelationId, RowExclusiveLock);
 
@@ -4900,7 +4914,8 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 		heap_close(pg_index, RowExclusiveLock);
 
 		CommandCounterIncrement();
-	}
+
+}
 }
 
 

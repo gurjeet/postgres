@@ -1942,8 +1942,9 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		if (def->defnamespace == NULL && 0 == strcmp(def->defname, "index"))
 		{
 			if (!(def->defaction == DEFELEM_UNSPEC || def->defaction == DEFELEM_SET))
-				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-								errmsg("syntax error in PRIMARY KEY clause")));
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("syntax error in PRIMARY KEY clause")));
 		}
 		else
 			continue;
@@ -1956,9 +1957,10 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			elog(ERROR, "only one WITH INDEX option can be specified for a primary key");
 
 		if (!IsA(def->arg, String))
-				ereport(ERROR, (errcode(ERRCODE_SYNTAX_ERROR),
-								errmsg("syntax error"),
-								errdetail("WITH INDEX option for primary key should be a string value")));
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("syntax error"),
+						errdetail("WITH INDEX option for primary key should be a string value.")));
 
 		index_name = strVal(def->arg);
 
@@ -1968,8 +1970,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		if (!OidIsValid(index_oid))
 			ereport(ERROR,
 					(errcode(ERRCODE_UNDEFINED_TABLE),
-					 errmsg("relation \"%s\" does not exist",
-							index_name)));
+					 errmsg("relation \"%s\" does not exist", index_name)));
 
 		/* This will throw an error if it is not an index */
 		index_rel = index_open(index_oid, AccessExclusiveLock);
@@ -1984,7 +1985,8 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		def->arg = (Node*)makeString(oid_string);
 
 		/* set index name in the statement, to affect the constraint name */
-		pkey->idxname = pstrdup(index_name);
+		if (pkey->idxname == NULL)
+			pkey->idxname = pstrdup(index_name);
 
 		/* Perform validity checks on the index */
 
@@ -2034,9 +2036,9 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		i = 0;
 		foreach(cell,pkey->indexParams)
 		{
-			IndexElem	*elem = (IndexElem*)lfirst(cell);
+			IndexElem  *elem = (IndexElem*)lfirst(cell);
 			int16		attnum = index_form->indkey.values[i];
-			char		*attname;
+			char	   *attname;
 			HeapTuple	attTuple;
 
 			if (elem->name == NULL)
@@ -2055,7 +2057,6 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			if (!HeapTupleIsValid(attTuple))
 				elog(ERROR, "cache lookup failed for attribute %d of relation %u",
 					 attnum, RelationGetRelid(rel));
-
 			attname = NameStr(((Form_pg_attribute)GETSTRUCT(attTuple))->attname);
 
 			if (strcmp(elem->name, attname) != 0)
@@ -2065,14 +2066,50 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			++i;
 		}
 
+#define DROP_PKEY 0
+#if DROP_PKEY
+
 		pkey_oid = getRelationPrimaryKey(rel);
 
 		if (OidIsValid(pkey_oid))
 		{
-			Relation		pkey_rel;
-			HeapTuple		pkey_tuple;
-			Form_pg_index	pkey_form;
-			AlterTableCmd  *at_cmd = NULL;
+			Oid					con_id;
+			char			   *con_name;
+			bool				con_deferrable;
+			bool				con_deferred;
+			Relation			pkey_rel;
+			HeapTuple			pkey_tuple;
+			HeapTuple			con_tuple;
+			Form_pg_index		pkey_form;
+			AlterTableCmd	   *at_cmd;
+			Form_pg_constraint	con_form;
+
+			/* TODO: rename *_form variables to *_rec */
+
+			/* Get the primary key constraint info */
+			con_id = get_index_constraint(pkey_oid);
+
+			Assert(OidIsValid(con_id));
+
+			con_tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(con_id));
+			if (!HeapTupleIsValid(con_tuple))
+				elog(ERROR, "cache lookup failed for constraint %u", con_id);
+			con_form = (Form_pg_constraint) GETSTRUCT(con_tuple);
+
+			con_name = NameStr(con_form->conname);
+			con_deferred = con_form->condeferred;
+			con_deferrable = con_form->condeferrable;
+
+			ReleaseSysCache(con_tuple);
+
+			if (pkey->deferrable != con_deferrable
+				|| pkey->initdeferred != con_deferred)
+				ereport(ERROR,
+						(/* TODO: No matching error code in errcodes.h */
+						//errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("cannot change deferrable/initially deferred option"),
+						errdetail("new primary key definition changes these"
+									" options from the existing primary key's definition.")));
 
 			pkey_rel = index_open(pkey_oid, AccessExclusiveLock);
 
@@ -2106,7 +2143,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			 * Loop over each attribute in the primary key and see if it
 			 * matches the attributes of the index we are replacing it with.
 			 */
-			for (i = 0; i < pkey_form->indnatts; i++)
+			for (i = 0; i < pkey_form->indnatts; ++i)
 			{
 				/* We do not expect primary keys on expressions */
 				Assert(pkey_form->indkey.values[i] != 0);
@@ -2123,8 +2160,8 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			/* Make a new command to drop the existing primary key constraint */
 			at_cmd = makeNode(AlterTableCmd);
 			at_cmd->subtype = AT_DropConstraint;
-			at_cmd->name = pstrdup(RelationGetRelationName(pkey_rel));
-			at_cmd->behavior = DROP_CASCADE;;
+			at_cmd->name = con_name;
+			at_cmd->behavior = DROP_CASCADE;
 			/*
 			 * Set missingok so that this wouldn't fail if the ALTER TABLE
 			 * already has a DROP CONSTRAINT clause for the primary key.
@@ -2137,6 +2174,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			relation_close(pkey_rel, NoLock);
 		}
 		else
+#endif	//DROP_PKEY
 		{
 			/*
 			 * TODO: Are the following checks enough to make sure this is the
@@ -2154,7 +2192,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 
 		/*
 		 * Do not break out of the loop. Use this opprtunity to catch
-		 * multiple 'WITH INDEX' clauses
+		 * multiple 'WITH INDEX' clauses.
 		 */
 	}
 }

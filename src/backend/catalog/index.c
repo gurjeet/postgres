@@ -617,12 +617,13 @@ index_create(Oid heapRelationId,
 	if (shared_relation && tableSpaceId != GLOBALTABLESPACE_OID)
 		elog(ERROR, "shared relations must be placed in pg_global tablespace");
 
+	/* We don't check existence if index already exists */
 	if (!index_exists)
-	if (get_relname_relid(indexRelationName, namespaceId))
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_TABLE),
-				 errmsg("relation \"%s\" already exists",
-						indexRelationName)));
+		if (get_relname_relid(indexRelationName, namespaceId))
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_TABLE),
+					 errmsg("relation \"%s\" already exists",
+							indexRelationName)));
 
 	/*
 	 * construct tuple descriptor for index tuples
@@ -667,78 +668,78 @@ index_create(Oid heapRelationId,
 	}
 	else
 	{
-	/*
-	 * create the index relation's relcache entry and physical disk file. (If
-	 * we fail further down, it's the smgr's responsibility to remove the disk
-	 * file again.)
-	 */
-	indexRelation = heap_create(indexRelationName,
-								namespaceId,
-								tableSpaceId,
-								indexRelationId,
-								indexTupDesc,
-								RELKIND_INDEX,
-								shared_relation,
-								mapped_relation,
-								allow_system_table_mods);
+		/*
+		 * create the index relation's relcache entry and physical disk file. (If
+		 * we fail further down, it's the smgr's responsibility to remove the disk
+		 * file again.)
+		 */
+		indexRelation = heap_create(indexRelationName,
+									namespaceId,
+									tableSpaceId,
+									indexRelationId,
+									indexTupDesc,
+									RELKIND_INDEX,
+									shared_relation,
+									mapped_relation,
+									allow_system_table_mods);
 
-	Assert(indexRelationId == RelationGetRelid(indexRelation));
+		Assert(indexRelationId == RelationGetRelid(indexRelation));
 
-	/*
-	 * Obtain exclusive lock on it.  Although no other backends can see it
-	 * until we commit, this prevents deadlock-risk complaints from lock
-	 * manager in cases such as CLUSTER.
-	 */
-	LockRelation(indexRelation, AccessExclusiveLock);
+		/*
+		 * Obtain exclusive lock on it.  Although no other backends can see it
+		 * until we commit, this prevents deadlock-risk complaints from lock
+		 * manager in cases such as CLUSTER.
+		 */
+		LockRelation(indexRelation, AccessExclusiveLock);
 
-	/*
-	 * Fill in fields of the index's pg_class entry that are not set correctly
-	 * by heap_create.
-	 *
-	 * XXX should have a cleaner way to create cataloged indexes
-	 */
-	indexRelation->rd_rel->relowner = heapRelation->rd_rel->relowner;
-	indexRelation->rd_rel->relam = accessMethodObjectId;
-	indexRelation->rd_rel->relkind = RELKIND_INDEX;
-	indexRelation->rd_rel->relhasoids = false;
-	indexRelation->rd_rel->relhasexclusion = is_exclusion;
+		/*
+		 * Fill in fields of the index's pg_class entry that are not set correctly
+		 * by heap_create.
+		 *
+		 * XXX should have a cleaner way to create cataloged indexes
+		 */
+		indexRelation->rd_rel->relowner = heapRelation->rd_rel->relowner;
+		indexRelation->rd_rel->relam = accessMethodObjectId;
+		indexRelation->rd_rel->relkind = RELKIND_INDEX;
+		indexRelation->rd_rel->relhasoids = false;
+		indexRelation->rd_rel->relhasexclusion = is_exclusion;
 
-	/*
-	 * store index's pg_class entry
-	 */
-	InsertPgClassTuple(pg_class, indexRelation,
-					   RelationGetRelid(indexRelation),
-					   (Datum) 0,
-					   reloptions);
+		/*
+		 * store index's pg_class entry
+		 */
+		InsertPgClassTuple(pg_class, indexRelation,
+						   RelationGetRelid(indexRelation),
+						   (Datum) 0,
+						   reloptions);
 
-	/* done with pg_class */
-	heap_close(pg_class, RowExclusiveLock);
+		/* done with pg_class */
+		heap_close(pg_class, RowExclusiveLock);
 
-	/*
-	 * now update the object id's of all the attribute tuple forms in the
-	 * index relation's tuple descriptor
-	 */
-	InitializeAttributeOids(indexRelation,
-							indexInfo->ii_NumIndexAttrs,
-							indexRelationId);
+		/*
+		 * now update the object id's of all the attribute tuple forms in the
+		 * index relation's tuple descriptor
+		 */
+		InitializeAttributeOids(indexRelation,
+								indexInfo->ii_NumIndexAttrs,
+								indexRelationId);
 
-	/*
-	 * append ATTRIBUTE tuples for the index
-	 */
-	AppendAttributeTuples(indexRelation, indexInfo->ii_NumIndexAttrs);
+		/*
+		 * append ATTRIBUTE tuples for the index
+		 */
+		AppendAttributeTuples(indexRelation, indexInfo->ii_NumIndexAttrs);
 
-	/* ----------------
-	 *	  update pg_index
-	 *	  (append INDEX tuple)
-	 *
-	 *	  Note that this stows away a representation of "predicate".
-	 *	  (Or, could define a rule to maintain the predicate) --Nels, Feb '92
-	 * ----------------
-	 */
-	UpdateIndexRelation(indexRelationId, heapRelationId, indexInfo,
-						classObjectId, coloptions, isprimary,
-						!deferrable,
-						!concurrent);
+		/* ----------------
+		 *	  update pg_index
+		 *	  (append INDEX tuple)
+		 *
+		 *	  Note that this stows away a representation of "predicate".
+		 *	  (Or, could define a rule to maintain the predicate) --Nels, Feb '92
+		 * ----------------
+		 */
+		UpdateIndexRelation(indexRelationId, heapRelationId, indexInfo,
+							classObjectId, coloptions, isprimary,
+							!deferrable,
+							!concurrent);
 	}
 
 	/*
@@ -898,35 +899,35 @@ index_create(Oid heapRelationId,
 
 		if (!index_exists)
 		{
-		/* Store dependency on operator classes */
-		for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
-		{
-			referenced.classId = OperatorClassRelationId;
-			referenced.objectId = classObjectId[i];
-			referenced.objectSubId = 0;
+			/* Store dependency on operator classes */
+			for (i = 0; i < indexInfo->ii_NumIndexAttrs; i++)
+			{
+				referenced.classId = OperatorClassRelationId;
+				referenced.objectId = classObjectId[i];
+				referenced.objectSubId = 0;
 
-			recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
-		}
+				recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
+			}
 
-		/* Store dependencies on anything mentioned in index expressions */
-		if (indexInfo->ii_Expressions)
-		{
-			recordDependencyOnSingleRelExpr(&myself,
-										  (Node *) indexInfo->ii_Expressions,
-											heapRelationId,
-											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO);
-		}
+			/* Store dependencies on anything mentioned in index expressions */
+			if (indexInfo->ii_Expressions)
+			{
+				recordDependencyOnSingleRelExpr(&myself,
+											  (Node *) indexInfo->ii_Expressions,
+												heapRelationId,
+												DEPENDENCY_NORMAL,
+												DEPENDENCY_AUTO);
+			}
 
-		/* Store dependencies on anything mentioned in predicate */
-		if (indexInfo->ii_Predicate)
-		{
-			recordDependencyOnSingleRelExpr(&myself,
-											(Node *) indexInfo->ii_Predicate,
-											heapRelationId,
-											DEPENDENCY_NORMAL,
-											DEPENDENCY_AUTO);
-		}
+			/* Store dependencies on anything mentioned in predicate */
+			if (indexInfo->ii_Predicate)
+			{
+				recordDependencyOnSingleRelExpr(&myself,
+												(Node *) indexInfo->ii_Predicate,
+												heapRelationId,
+												DEPENDENCY_NORMAL,
+												DEPENDENCY_AUTO);
+			}
 		}
 	}
 	else
@@ -968,8 +969,6 @@ index_create(Oid heapRelationId,
 	}
 	else if (skip_build)
 	{
-		if (!index_exists)
-		{
 		/*
 		 * Caller is responsible for filling the index later on.  However,
 		 * we'd better make sure that the heap relation is correctly marked as
@@ -983,7 +982,6 @@ index_create(Oid heapRelationId,
 						   heapRelation->rd_rel->reltuples);
 		/* Make the above update visible */
 		CommandCounterIncrement();
-		}
 	}
 	else
 	{
