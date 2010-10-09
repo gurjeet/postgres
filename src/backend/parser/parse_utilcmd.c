@@ -124,8 +124,6 @@ static void transformConstraintAttrs(ParseState *pstate, List *constraintList);
 static void transformColumnType(ParseState *pstate, ColumnDef *column);
 static void setSchemaName(char *context_schema, char **stmt_schema_name);
 
-static void replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds);
-
 /*
  * transformCreateStmt -
  *	  parse analysis for CREATE TABLE
@@ -1916,150 +1914,6 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
 }
 
 /*
- * If the PRIMARY KEY clasue has WITH INDEX option set, then prepare to use
- * that index as the primary key.
- */
-static void
-replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
-{
-	ListCell *l;
-	Oid	index_oid = InvalidOid;	/* Oid of the index to create/replace primary key with */
-
-	foreach(l, pkey->options)
-	{
-		DefElem		   *def = (DefElem*)lfirst(l);
-		int				i;
-		char		   *index_name;
-		ListCell	   *cell;
-		Relation		index_rel;
-		Form_pg_index	index_form;
-
-		if (def->defnamespace != NULL || strcmp(def->defname, "index") != 0)
-			continue;
-
-		/*
-		 * If we don't do this, WITH INDEX option will reach DefineIndex(), and
-		 * it will throw a fit.
-		 */
-		if (OidIsValid(index_oid))
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					errmsg("only one WITH INDEX option can be specified for a primary key")));
-
-		if (!IsA(def->arg, String))
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("syntax error"),
-						errdetail("WITH INDEX option for primary key should be a string value.")));
-
-		index_name = strVal(def->arg);
-
-		/* Look for the index in the same schema as the table */
-		index_oid = get_relname_relid(index_name, RelationGetNamespace(rel));
-
-		if (!OidIsValid(index_oid))
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_OBJECT),
-					errmsg("relation \"%s\" not found", index_name)));
-
-		/* This will throw an error if it is not an index */
-		index_rel = index_open(index_oid, AccessExclusiveLock);
-
-		/* Check that it does not have an associated constraint */
-		if (OidIsValid(get_index_constraint(index_oid)))
-			ereport(ERROR,
-					(errmsg("index \"%s\" is associated with a constraint",
-								index_name)));
-
-		/* Perform validity checks on the index */
-		index_form = index_rel->rd_index;
-
-		if (!index_form->indisvalid)
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					errmsg("index \"%s\" is not valid", index_name)));
-
-		if (!index_form->indisready)
-			ereport(ERROR,
-					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					errmsg("index \"%s\" is not ready", index_name)));
-
-		if (index_form->indrelid != RelationGetRelid(rel))
-			elog(ERROR, "index \"%s\" belongs some other table", index_name);
-
-		if (!index_form->indisunique)
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					errmsg("\"%s\" is not a unique index", index_name),
-					errdetail("cannot create primary key using a non-unique index.")));
-
-		if (index_rel->rd_indextuple != NULL &&
-			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indexprs))
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					errmsg("index \"%s\" contains expressions", index_name),
-					errdetail("cannot create primary key using an expression index.")));
-
-		if (index_rel->rd_indextuple != NULL &&
-			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indpred))
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					errmsg("\"%s\" is a partial index", index_name),
-					errdetail("cannot create primary key using a partial index.")));
-
-		/* Match the PRIMARY KEY clasue from the ALTER statement with the index */
-		if (index_form->indnatts != list_length(pkey->indexParams))
-			elog(ERROR, "primary key definition does not match the index");
-
-		/* XXX: Assert here? */
-		if (index_form->indnatts > rel->rd_att->natts)
-			elog(ERROR, "index \"%s\" has more columns than the table",
-							index_name);
-
-		i = 0;
-		foreach(cell, pkey->indexParams)
-		{
-			IndexElem  *elem = (IndexElem*)lfirst(cell);
-			int16		attnum = index_form->indkey.values[i];
-			char	   *attname;
-
-			if (elem->name == NULL)
-			{
-				Assert(elem->expr != NULL);
-
-				/* Grammar already prevents this by disallowing expressions. */
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("PRIMARY KEY clause contains expressions"),
-						errdetail("cannot create primary key using an expression index.")));
-			}
-
-			/*
-			 * We need not worry about attisdropped, since this index's
-			 * existence guarantees that the column exists.
-			 */
-			attname = NameStr(rel->rd_att->attrs[attnum-1]->attname);
-
-			if (strcmp(elem->name, attname) != 0)
-				elog(ERROR, "index columns do not match primary key definition");
-
-			++i;
-		}
-
-		/* Currently only B-tree indexes are suupported for primary keys */
-		if (index_rel->rd_rel->relam != BTREE_AM_OID)
-			elog(ERROR, "\"%s\" is not a B-Tree index", index_name);
-
-		relation_close(index_rel, NoLock);
-
-		/*
-		 * Do not break out of the loop. Use this opprtunity to catch
-		 * multiple 'WITH INDEX' clauses.
-		 */
-	}
-}
-
-/*
  * transformAlterTableStmt -
  *		parse analysis for ALTER TABLE
  *
@@ -2202,9 +2056,6 @@ transformAlterTableStmt(AlterTableStmt *stmt, const char *queryString)
 	transformIndexConstraints(pstate, &cxt);
 
 	transformFKConstraints(pstate, &cxt, skipValidation, true);
-
-	if (cxt.pkey && cxt.pkey->options)
-		replacePrimaryKeyIndex(rel, cxt.pkey, &newcmds);
 
 	/*
 	 * Push any index-creation commands into the ALTER, so that they can be

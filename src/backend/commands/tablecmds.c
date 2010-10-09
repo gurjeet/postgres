@@ -336,7 +336,7 @@ static void ATExecDropInherit(Relation rel, RangeVar *parent, LOCKMODE lockmode)
 static void copy_relation_data(SMgrRelation rel, SMgrRelation dst,
 				   ForkNumber forkNum, bool istemp);
 static const char *storage_name(char c);
-
+static Oid get_pkey_index_oid(IndexStmt *pkey_clause);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -4799,6 +4799,190 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 		tab->new_changeoids = true;
 	}
 }
+/*
+ * If the PRIMARY KEY clasue has WITH INDEX option set, then prepare to use
+ * that index as the primary key.
+ */
+static Oid
+get_pkey_index_oid(IndexStmt *pkey_clause)
+{
+	Oid			index_oid = InvalidOid;	/* Oid of the index to create/replace primary key with */
+	ListCell   *l;
+	ListCell   *prev = NULL;
+	ListCell   *option = NULL;
+	Relation	rel;
+
+	rel = relation_openrv(pkey_clause->relation, AccessExclusiveLock);
+
+	foreach(l, pkey_clause->options)
+	{
+		DefElem		   *def = (DefElem*)lfirst(l);
+		int				i;
+		char		   *index_name;
+		ListCell	   *cell;
+		Relation		index_rel;
+		Form_pg_index	index_form;
+
+		if (def->defnamespace != NULL || strcmp(def->defname, "index") != 0)
+		{
+			prev = l;
+			continue;
+		}
+
+		option = l;
+
+		/*
+		 * If we don't do this, WITH INDEX option will reach DefineIndex(), and
+		 * it will throw a fit.
+		 */
+		if (OidIsValid(index_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("only one WITH INDEX option can be specified for a primary key")));
+
+		if (!IsA(def->arg, String))
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("syntax error"),
+						errdetail("WITH INDEX option for primary key should be a string value.")));
+
+		index_name = strVal(def->arg);
+
+		/* Look for the index in the same schema as the table */
+		index_oid = get_relname_relid(index_name, RelationGetNamespace(rel));
+
+		if (!OidIsValid(index_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					errmsg("relation \"%s\" not found", index_name)));
+
+		/* This will throw an error if it is not an index */
+		index_rel = index_open(index_oid, AccessExclusiveLock);
+
+		/* Check that it does not have an associated constraint */
+		if (OidIsValid(get_index_constraint(index_oid)))
+			ereport(ERROR,
+					(errmsg("index \"%s\" is associated with a constraint",
+								index_name)));
+
+		/* Perform validity checks on the index */
+		index_form = index_rel->rd_index;
+
+		if (!index_form->indisvalid)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("index \"%s\" is not valid", index_name)));
+
+		if (!index_form->indisready)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("index \"%s\" is not ready", index_name)));
+
+		if (index_form->indrelid != RelationGetRelid(rel))
+			elog(ERROR, "index \"%s\" belongs some other table", index_name);
+
+		if (!index_form->indisunique)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("\"%s\" is not a unique index", index_name),
+					errdetail("cannot create primary key using a non-unique index.")));
+
+		if (index_rel->rd_indextuple != NULL &&
+			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indexprs))
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("index \"%s\" contains expressions", index_name),
+					errdetail("cannot create primary key using an expression index.")));
+
+		if (index_rel->rd_indextuple != NULL &&
+			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indpred))
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("\"%s\" is a partial index", index_name),
+					errdetail("cannot create primary key using a partial index.")));
+
+		/* Match the PRIMARY KEY clasue from the ALTER statement with the index */
+		if (index_form->indnatts != list_length(pkey_clause->indexParams))
+			elog(ERROR, "primary key definition does not match the index");
+
+		/* XXX: Assert here? */
+		if (index_form->indnatts > rel->rd_att->natts)
+			elog(ERROR, "index \"%s\" has more columns than the table",
+							index_name);
+
+		i = 0;
+		foreach(cell, pkey_clause->indexParams)
+		{
+			IndexElem  *elem = (IndexElem*)lfirst(cell);
+			int16		attnum = index_form->indkey.values[i];
+			char	   *attname;
+
+			if (elem->name == NULL)
+			{
+				Assert(elem->expr != NULL);
+
+				/* Grammar already prevents this by disallowing expressions. */
+				ereport(ERROR,
+						(errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("PRIMARY KEY clause contains expressions"),
+						errdetail("cannot create primary key using an expression index.")));
+			}
+
+			/*
+			 * We need not worry about attisdropped, since this index's
+			 * existence guarantees that the column exists.
+			 */
+			attname = NameStr(rel->rd_att->attrs[attnum-1]->attname);
+
+			if (strcmp(elem->name, attname) != 0)
+				elog(ERROR, "index columns do not match primary key definition");
+
+			++i;
+		}
+
+		/* Currently only B-tree indexes are suupported for primary keys */
+		if (index_rel->rd_rel->relam != BTREE_AM_OID)
+			elog(ERROR, "\"%s\" is not a B-Tree index", index_name);
+
+		relation_close(index_rel, NoLock);
+
+		/*
+		 * Do not break out of the loop. Use this opprtunity to catch
+		 * multiple 'WITH INDEX' clauses.
+		 */
+	}
+
+	if (OidIsValid(index_oid))
+	{
+		pkey_clause->options = list_delete_cell(pkey_clause->options, option, prev);
+
+		/*
+		 * Set index name in the statement, to affect the constraint name.
+		 * If we don't do it here, that implies DefineIndex() will choose the
+		 * name, and after that it is too late to rename the index to match
+		 * constraint name since doing that will complain 'constraint already
+		 * exists'.
+		 */
+		if (pkey_clause->idxname == NULL)
+		{
+			pkey_clause->idxname = ChooseIndexName(RelationGetRelationName(rel),
+										RelationGetNamespace(rel),
+										NULL,
+										/* Don't need this, but it doesn't hurt */
+										pkey_clause->excludeOpNames,
+										true,
+										true);
+		}
+
+		/* Rename index to maintain consistency with the rest of the code */
+		RenameRelation(index_oid, pkey_clause->idxname, OBJECT_INDEX);
+
+		relation_close(rel, NoLock);
+
+	}
+
+	return index_oid;
+}
 
 /*
  * ALTER TABLE ADD INDEX
@@ -4815,8 +4999,6 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	bool		skip_build;
 	bool		quiet;
 	Oid			index_oid = InvalidOid;
-	ListCell   *l = NULL;
-	ListCell   *prev = NULL;
 
 	Assert(IsA(stmt, IndexStmt));
 
@@ -4827,58 +5009,20 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	/* suppress notices when rebuilding existing index */
 	quiet = is_rebuild;
 
-	/* If we have the WITH INDEX option set, use that index for this primary key */
-	if (stmt->primary)
-	foreach(l, stmt->options)
+	if (stmt->primary && stmt->options)
 	{
-		DefElem	*def = (DefElem*)lfirst(l);
-		Relation rel;
+		index_oid = get_pkey_index_oid(stmt);
 
-		if (def->defnamespace != NULL || strcmp(def->defname, "index") != 0)
+		/* If we have the WITH INDEX option set, use that for the primary key */
+		if (OidIsValid(index_oid))
 		{
-			prev = l;
-			continue;
+			/* We override the params set above */
+			skip_build = true;
+
+			/* We don't want the 'will create implicit index' message */
+			quiet = true;
 		}
-
-		/*
-		 * Set index name in the statement, to affect the constraint name.
-		 * If we don't do it here, that implies DefineIndex() will choose the
-		 * name, and after that it is too late to rename the index to match
-		 * constraint name since doing that will complain 'constraint already
-		 * exists'.
-		 */
-
-		rel = relation_openrv(stmt->relation, AccessExclusiveLock);
-
-		if (stmt->idxname == NULL)
-		{
-			stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
-									RelationGetNamespace(rel),
-									NULL,
-									/* Don't need this, but it doesn't hurt */
-									stmt->excludeOpNames,
-									true,
-									true);
-		}
-
-		/* Rename index to maintain consistency with the rest of the code */
-		index_oid = get_relname_relid(strVal(def->arg), RelationGetNamespace(rel));
-		Assert(OidIsValid(index_oid));
-
-		RenameRelation(index_oid, stmt->idxname, OBJECT_INDEX);
-
-		relation_close(rel, NoLock);
-
-		/* We override the params set above */
-		skip_build = true;
-		quiet = true; /* We don't want the 'will create implicit index' message */
-
-		/* transform stage has made sure that there's just one WITH INDEX clause */
-		break;
 	}
-
-	if (l) /* unecessary check, but good for readability */
-		stmt->options = list_delete_cell(stmt->options, l, prev);
 
 	/* The IndexStmt has already been through transformIndexStmt */
 
@@ -4903,7 +5047,10 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 				quiet,
 				false);
 
-	/* Now update pg_index tuple to mark this index as indisprimary */
+	/*
+	 * Mark the index as indisprimary. We can't do this before DefineIndex()
+	 * because it complains about duplicate primary key.
+	 */
 	if (stmt->primary && OidIsValid(index_oid))
 	{
 		Relation		pg_index;
