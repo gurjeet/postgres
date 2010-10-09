@@ -4954,6 +4954,7 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 
 	if (OidIsValid(index_oid))
 	{
+		/* Remove the WITH INDEX clause. DefineIndex() does not understand it.*/
 		idx_stmt->options = list_delete_cell(idx_stmt->options, option, prev);
 
 		/*
@@ -4968,7 +4969,7 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 			idx_stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
 										RelationGetNamespace(rel),
 										NULL,
-										/* Don't need this, but it doesn't hurt */
+										/* Don't need this, but it won't hurt */
 										idx_stmt->excludeOpNames,
 										true,
 										true);
