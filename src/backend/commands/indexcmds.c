@@ -1552,6 +1552,7 @@ relationHasPrimaryKey(Relation rel)
 
 	foreach(indexoidscan, indexoidlist)
 	{
+		Oid			indexoid = lfirst_oid(indexoidscan);
 		HeapTuple	indexTuple;
 
 		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));

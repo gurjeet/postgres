@@ -4930,7 +4930,6 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	}
 }
 
-
 /*
  * ALTER TABLE ADD CONSTRAINT
  */
