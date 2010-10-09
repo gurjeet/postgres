@@ -4957,7 +4957,7 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 		pkey_clause->options = list_delete_cell(pkey_clause->options, option, prev);
 
 		/*
-		 * Set index name in the statement, to affect the constraint name.
+		 * Assign a constraint name, if the clause doesn't have one.
 		 * If we don't do it here, that implies DefineIndex() will choose the
 		 * name, and after that it is too late to rename the index to match
 		 * constraint name since doing that will complain 'constraint already

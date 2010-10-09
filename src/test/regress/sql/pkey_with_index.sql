@@ -16,7 +16,7 @@ ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD primary key(b, a) WITH (
 DROP INDEX rpi_uniq_idx;
 DROP INDEX rpi_uniq2_idx;
 
--- Negative test cases
+
 
 ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = 3 );
 ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = del );
