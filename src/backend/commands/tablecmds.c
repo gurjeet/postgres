@@ -336,7 +336,7 @@ static void ATExecDropInherit(Relation rel, RangeVar *parent, LOCKMODE lockmode)
 static void copy_relation_data(SMgrRelation rel, SMgrRelation dst,
 				   ForkNumber forkNum, bool istemp);
 static const char *storage_name(char c);
-static Oid get_pkey_index_oid(IndexStmt *pkey_clause);
+static Oid get_pkey_index_oid(IndexStmt *idx_stmt);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -4804,7 +4804,7 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
  * that index as the primary key.
  */
 static Oid
-get_pkey_index_oid(IndexStmt *pkey_clause)
+get_pkey_index_oid(IndexStmt *idx_stmt)
 {
 	Oid			index_oid = InvalidOid;	/* Oid of the index to create/replace primary key with */
 	ListCell   *l;
@@ -4812,9 +4812,9 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 	ListCell   *option = NULL;
 	Relation	rel;
 
-	rel = relation_openrv(pkey_clause->relation, AccessExclusiveLock);
+	rel = relation_openrv(idx_stmt->relation, AccessExclusiveLock);
 
-	foreach(l, pkey_clause->options)
+	foreach(l, idx_stmt->options)
 	{
 		DefElem		   *def = (DefElem*)lfirst(l);
 		int				i;
@@ -4902,7 +4902,7 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 					errdetail("cannot create primary key using a partial index.")));
 
 		/* Match the PRIMARY KEY clasue from the ALTER statement with the index */
-		if (index_form->indnatts != list_length(pkey_clause->indexParams))
+		if (index_form->indnatts != list_length(idx_stmt->indexParams))
 			elog(ERROR, "primary key definition does not match the index");
 
 		/* XXX: Assert here? */
@@ -4911,7 +4911,7 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 							index_name);
 
 		i = 0;
-		foreach(cell, pkey_clause->indexParams)
+		foreach(cell, idx_stmt->indexParams)
 		{
 			IndexElem  *elem = (IndexElem*)lfirst(cell);
 			int16		attnum = index_form->indkey.values[i];
@@ -4954,7 +4954,7 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 
 	if (OidIsValid(index_oid))
 	{
-		pkey_clause->options = list_delete_cell(pkey_clause->options, option, prev);
+		idx_stmt->options = list_delete_cell(idx_stmt->options, option, prev);
 
 		/*
 		 * Assign a constraint name, if the clause doesn't have one.
@@ -4963,19 +4963,19 @@ get_pkey_index_oid(IndexStmt *pkey_clause)
 		 * constraint name since doing that will complain 'constraint already
 		 * exists'.
 		 */
-		if (pkey_clause->idxname == NULL)
+		if (idx_stmt->idxname == NULL)
 		{
-			pkey_clause->idxname = ChooseIndexName(RelationGetRelationName(rel),
+			idx_stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
 										RelationGetNamespace(rel),
 										NULL,
 										/* Don't need this, but it doesn't hurt */
-										pkey_clause->excludeOpNames,
+										idx_stmt->excludeOpNames,
 										true,
 										true);
 		}
 
 		/* Rename index to maintain consistency with the rest of the code */
-		RenameRelation(index_oid, pkey_clause->idxname, OBJECT_INDEX);
+		RenameRelation(index_oid, idx_stmt->idxname, OBJECT_INDEX);
 
 		relation_close(rel, NoLock);
 
