@@ -15,7 +15,6 @@
 #define DEFREM_H
 
 #include "nodes/parsenodes.h"
-#include "utils/relcache.h"
 
 
 /* commands/indexcmds.c */

@@ -71,6 +71,7 @@ static Oid GetIndexOpClass(List *opclass, Oid attrType,
 static char *ChooseIndexNameAddition(List *colnames);
 static bool relationHasPrimaryKey(Relation rel);
 
+
 /*
  * DefineIndex
  *		Creates a new index.
@@ -334,7 +335,8 @@ DefineIndex(RangeVar *heapRelation,
 		 * clauses; and CREATE INDEX doesn't have a way to say PRIMARY KEY, so
 		 * it's no problem either.
 		 */
-		if (is_alter_table && relationHasPrimaryKey(rel))
+		if (is_alter_table &&
+			relationHasPrimaryKey(rel))
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),

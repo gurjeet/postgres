@@ -124,6 +124,7 @@ static void transformConstraintAttrs(ParseState *pstate, List *constraintList);
 static void transformColumnType(ParseState *pstate, ColumnDef *column);
 static void setSchemaName(char *context_schema, char **stmt_schema_name);
 
+
 /*
  * transformCreateStmt -
  *	  parse analysis for CREATE TABLE
@@ -1912,6 +1913,7 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
 	/* Close relation, but keep the exclusive lock */
 	heap_close(rel, NoLock);
 }
+
 
 /*
  * transformAlterTableStmt -
