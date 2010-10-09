@@ -1919,7 +1919,7 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
  * If the PRIMARY KEY clasue has WITH INDEX option set, then prepare to use
  * that index as the primary key.
  */
-void
+static void
 replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 {
 	ListCell *l;
@@ -1927,26 +1927,14 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 
 	foreach(l, pkey->options)
 	{
-		DefElem		*def = (DefElem*)lfirst(l);
-
-		int2	i;	/* iterator for small loops */
-		Oid		pkey_oid;
-		char   *index_name;
-
+		DefElem		   *def = (DefElem*)lfirst(l);
+		int				i;
+		char		   *index_name;
 		ListCell	   *cell;
 		Relation		index_rel;
-		HeapTuple		index_tuple;
 		Form_pg_index	index_form;
 
-		if (def->defnamespace == NULL && 0 == strcmp(def->defname, "index"))
-		{
-			if (def->defaction != DEFELEM_UNSPEC &&
-				def->defaction != DEFELEM_SET)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("syntax error in PRIMARY KEY clause")));
-		}
-		else
+		if (def->defnamespace != NULL || strcmp(def->defname, "index") != 0)
 			continue;
 
 		/*
@@ -1954,7 +1942,9 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		 * it will throw a fit.
 		 */
 		if (OidIsValid(index_oid))
-			elog(ERROR, "only one WITH INDEX option can be specified for a primary key");
+			ereport(ERROR,
+					(errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("only one WITH INDEX option can be specified for a primary key")));
 
 		if (!IsA(def->arg, String))
 				ereport(ERROR,
@@ -1973,7 +1963,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 					 errmsg("index \"%s\" not found", index_name)));
 
 		/* Check that it does not have an associated constraint */
-		if (OidIsValid(get_index_constraint(pkey_oid)))
+		if (OidIsValid(get_index_constraint(index_oid)))
 			ereport(ERROR,
 					(errmsg("index \"%s\" is associated with a constraint",
 								index_name)));
@@ -1982,10 +1972,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		index_rel = index_open(index_oid, AccessExclusiveLock);
 
 		/* Perform validity checks on the index */
-		index_tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
-		if (!HeapTupleIsValid(index_tuple))
-			elog(ERROR, "cache lookup failed for index %u", index_oid);
-		index_form = (Form_pg_index) GETSTRUCT(index_tuple);
+		index_form = index_rel->rd_index;
 
 		if (!index_form->indisvalid)
 			ereport(ERROR,
@@ -1998,7 +1985,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 					errmsg("index \"%s\" is not ready", index_name)));
 
 		if (index_form->indrelid != RelationGetRelid(rel))
-			elog(ERROR, "index is not on this table");
+			elog(ERROR, "index \"%s\" belongs some other table", index_name);
 
 		if (!index_form->indisunique)
 			ereport(ERROR,
@@ -2020,13 +2007,12 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 					errmsg("\"%s\" is a partial index", index_name),
 					errdetail("cannot create primary key using a partial index.")));
 
-		/* Match the PRIMARY KEY clasue from the ALTER statement, with the index */
-
+		/* Match the PRIMARY KEY clasue from the ALTER statement with the index */
 		if (index_form->indnatts != list_length(pkey->indexParams))
 			elog(ERROR, "primary key definition does not match the index");
 
 		i = 0;
-		foreach(cell,pkey->indexParams)
+		foreach(cell, pkey->indexParams)
 		{
 			IndexElem  *elem = (IndexElem*)lfirst(cell);
 			int16		attnum = index_form->indkey.values[i];
@@ -2058,126 +2044,10 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			++i;
 		}
 
-#define DROP_PKEY 0
-#if DROP_PKEY
+		/* Currently only B-tree indexes are suupported for primary keys */
+		if (index_rel->rd_rel->relam != BTREE_AM_OID)
+			elog(ERROR, "\"%s\" is not a B-Tree index", index_name);
 
-		pkey_oid = getRelationPrimaryKey(rel);
-
-		if (OidIsValid(pkey_oid))
-		{
-			Oid					con_id;
-			char			   *con_name;
-			bool				con_deferrable;
-			bool				con_deferred;
-			Relation			pkey_rel;
-			HeapTuple			pkey_tuple;
-			HeapTuple			con_tuple;
-			Form_pg_index		pkey_form;
-			AlterTableCmd	   *at_cmd;
-			Form_pg_constraint	con_form;
-
-			/* TODO: rename *_form variables to *_rec */
-
-			/* Get the primary key constraint info */
-			con_id = get_index_constraint(pkey_oid);
-
-			Assert(OidIsValid(con_id));
-
-			con_tuple = SearchSysCache1(CONSTROID, ObjectIdGetDatum(con_id));
-			if (!HeapTupleIsValid(con_tuple))
-				elog(ERROR, "cache lookup failed for constraint %u", con_id);
-			con_form = (Form_pg_constraint) GETSTRUCT(con_tuple);
-
-			con_name = NameStr(con_form->conname);
-			con_deferred = con_form->condeferred;
-			con_deferrable = con_form->condeferrable;
-
-			ReleaseSysCache(con_tuple);
-
-			if (pkey->deferrable != con_deferrable
-				|| pkey->initdeferred != con_deferred)
-				ereport(ERROR,
-						(errmsg("cannot change deferrable/initially deferred option"),
-						errdetail("new primary key definition changes these"
-									" options from the existing primary key's definition.")));
-
-			pkey_rel = index_open(pkey_oid, AccessExclusiveLock);
-
-			/*
-			 * Check pg_class->relam to see if the index type match. As of now, only
-			 * B-Tree indexes are used to implement primary keys, but it doesn't hurt
-			 * to be future proof.
-			 */
-			if (pkey_rel->rd_rel->relam != index_rel->rd_rel->relam)
-				elog(ERROR, "index method of the index and the existing primay key do not match");
-
-			if (pkey_rel->rd_rel->relowner != index_rel->rd_rel->relowner)
-				elog(ERROR, "owner of the index and the existing primary key do not match");
-
-			if (RelationGetNamespace(pkey_rel) != RelationGetNamespace(index_rel))
-				elog(ERROR, "schema of the index and the existing primary key do not match");
-
-			pkey_tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(pkey_oid));
-			if (!HeapTupleIsValid(pkey_tuple))
-				elog(ERROR, "cache lookup failed for index %u", pkey_oid);
-			pkey_form = (Form_pg_index) GETSTRUCT(pkey_tuple);
-
-			/* TODO: Should we check for indcheckxmin ?*/
-
-			Assert(index_form->indrelid == pkey_form->indrelid);
-
-			if (index_form->indnatts != pkey_form->indnatts)
-				elog(ERROR, "existing primary key and the index do not match");
-
-			/*
-			 * See if the primary key matches the attributes of the index we
-			 * are replacing it with.
-			 */
-			for (i = 0; i < pkey_form->indnatts; ++i)
-			{
-				/* We do not expect primary keys on expressions */
-				Assert(pkey_form->indkey.values[i] != 0);
-
-				if (pkey_form->indkey.values[i] != index_form->indkey.values[i])
-					elog(ERROR, "column list of existing primary key and the index do not match");
-
-				if (pkey_form->indclass.values[i] != index_form->indclass.values[i])
-					elog(ERROR, "operator classes of existing primary key and the index do not match");
-			}
-
-			ReleaseSysCache(pkey_tuple);
-
-			/* Make a new command to drop the existing primary key constraint */
-			at_cmd = makeNode(AlterTableCmd);
-			at_cmd->subtype = AT_DropConstraint;
-			at_cmd->name = con_name;
-			at_cmd->behavior = DROP_CASCADE;
-			/*
-			 * Set missingok so that this wouldn't fail if the ALTER TABLE
-			 * already has a DROP CONSTRAINT clause for the primary key.
-			 */
-			at_cmd->missing_ok = true;
-
-			*newcmds = lappend(*newcmds, at_cmd);
-
-			/* close the pkey handle but keep the lock */
-			relation_close(pkey_rel, NoLock);
-		}
-		else
-#endif	//DROP_PKEY
-		{
-			/*
-			 * TODO: Are the following checks enough to make sure this is the
-			 * right kind of index for a primary key?
-			 */
-
-			if (index_rel->rd_rel->relam != BTREE_AM_OID)
-				elog(ERROR, "\"%s\" is not a B-Tree index", index_name);
-
-			/* We have already checked above that this is a unique index */
-		}
-
-		ReleaseSysCache(index_tuple);
 		relation_close(index_rel, NoLock);
 
 		/*

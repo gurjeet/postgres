@@ -1,0 +1,59 @@
+CREATE TABLE rpi_test( a int , b varchar(10), c char);
+-- add some data so that all tests have something to work with.
+INSERT INTO rpi_test VALUES( 1, 2 );
+INSERT INTO rpi_test VALUES( 3, 4 );
+INSERT INTO rpi_test VALUES( 5, 6 );
+CREATE UNIQUE INDEX rpi_uniq_idx ON rpi_test(a , b);
+ALTER TABLE rpi_test ADD primary key(a, b) WITH (INDEX = 'rpi_uniq_idx');
+CREATE UNIQUE INDEX rpi_uniq2_idx ON rpi_test(b , a);
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD primary key(b, a) WITH (INDEX = 'rpi_uniq2_idx');
+DROP INDEX rpi_uniq_idx;
+ERROR:  index "rpi_uniq_idx" does not exist
+DROP INDEX rpi_uniq2_idx;
+ERROR:  index "rpi_uniq2_idx" does not exist
+-- Negative test cases
+ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = 3 );
+ERROR:  syntax error
+DETAIL:  WITH INDEX option for primary key should be a string value.
+ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = del );
+ERROR:  syntax error
+DETAIL:  WITH INDEX option for primary key should be a string value.
+ALTER TABLE rpi_test ADD PRIMARY KEY(b, a) WITH (INDEX = 'rpi_idx_doesnt_exist');
+ERROR:  index "rpi_idx_doesnt_exist" not found
+ALTER TABLE rpi_test ADD UNIQUE (a);
+NOTICE:  ALTER TABLE / ADD UNIQUE will create implicit index "rpi_test_a_key" for table "rpi_test"
+ALTER TABLE rpi_test ADD PRIMARY KEY(a) WITH (INDEX = 'rpi_test_a_key');
+ERROR:  index "rpi_test_a_key" is associated with a constraint
+CREATE INDEX rpi_idx1 ON rpi_test(a , b);
+ALTER TABLE rpi_test ADD primary key(a, b) WITH (INDEX = 'rpi_idx1'); -- should fail; non-unique
+ERROR:  "rpi_idx1" is not a unique index
+DETAIL:  cannot create primary key using a non-unique index.
+CREATE UNIQUE INDEX rpi_idx2 ON rpi_test(a , b);
+-- should fail; WITH INDEX option specified more than once.
+ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = 'rpi_idx2', INDEX = 'rpi_idx2' );
+ERROR:  only one WITH INDEX option can be specified for a primary key
+ALTER TABLE rpi_test ADD primary key(a, b) WITH (INDEX = 'rpi_idx2');
+ERROR:  multiple primary keys for table "rpi_test" are not allowed
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey;
+ALTER TABLE rpi_test ADD primary key(a, b);
+NOTICE:  ALTER TABLE / ADD PRIMARY KEY will create implicit index "rpi_test_pkey" for table "rpi_test"
+CREATE UNIQUE INDEX rpi_idx3 ON rpi_test(a);
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD PRIMARY KEY(a, b) WITH (INDEX = 'rpi_idx3'); -- should fail
+ERROR:  primary key definition does not match the index
+DROP INDEX rpi_idx3;
+SELECT relname, relkind FROM pg_class WHERE relname like E'rpi\\_%' ORDER BY relkind DESC, relname ASC;
+    relname     | relkind 
+----------------+---------
+ rpi_test       | r
+ rpi_idx1       | i
+ rpi_idx2       | i
+ rpi_test_a_key | i
+ rpi_test_pkey  | i
+(5 rows)
+
+DROP TABLE rpi_test;
+SELECT relname, relkind FROM pg_class WHERE relname like E'rpi\\_%';
+ relname | relkind 
+---------+---------
+(0 rows)
+
