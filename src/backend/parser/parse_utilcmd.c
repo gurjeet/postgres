@@ -1957,6 +1957,11 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		/* Look for the index in the same schema as the table */
 		index_oid = get_relname_relid(index_name, RelationGetNamespace(rel));
 
+		if (!OidIsValid(index_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					errmsg("relation \"%s\" not found", index_name)));
+
 		/* This will throw an error if it is not an index */
 		index_rel = index_open(index_oid, AccessExclusiveLock);
 
@@ -2006,36 +2011,38 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		if (index_form->indnatts != list_length(pkey->indexParams))
 			elog(ERROR, "primary key definition does not match the index");
 
+		/* XXX: Assert here? */
+		if (index_form->indnatts > rel->rd_att->natts)
+			elog(ERROR, "index \"%s\" has more columns than the table",
+							index_name);
+
 		i = 0;
 		foreach(cell, pkey->indexParams)
 		{
 			IndexElem  *elem = (IndexElem*)lfirst(cell);
 			int16		attnum = index_form->indkey.values[i];
 			char	   *attname;
-			HeapTuple	attTuple;
 
 			if (elem->name == NULL)
 			{
-				/* Grammar already prevents this by disallowing expressions. */
 				Assert(elem->expr != NULL);
+
+				/* Grammar already prevents this by disallowing expressions. */
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						errmsg("PRIMARY KEY clause contains expressions"),
 						errdetail("cannot create primary key using an expression index.")));
 			}
 
-			attTuple = SearchSysCache2(ATTNUM,
-									   ObjectIdGetDatum(RelationGetRelid(rel)),
-									   Int16GetDatum(attnum));
-			if (!HeapTupleIsValid(attTuple))
-				elog(ERROR, "cache lookup failed for attribute %d of relation %u",
-					 attnum, RelationGetRelid(rel));
-			attname = NameStr(((Form_pg_attribute)GETSTRUCT(attTuple))->attname);
+			/*
+			 * We need not worry about attisdropped, since this index's
+			 * existence guarantees that the column exists.
+			 */
+			attname = NameStr(rel->rd_att->attrs[attnum-1]->attname);
 
 			if (strcmp(elem->name, attname) != 0)
-				elog(ERROR,"index columns do not match primary key definition");
+				elog(ERROR, "index columns do not match primary key definition");
 
-			ReleaseSysCache(attTuple);
 			++i;
 		}
 

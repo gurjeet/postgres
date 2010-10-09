@@ -19,7 +19,7 @@ ALTER TABLE rpi_test ADD PRIMARY KEY (a, b) WITH ( INDEX = del );
 ERROR:  syntax error
 DETAIL:  WITH INDEX option for primary key should be a string value.
 ALTER TABLE rpi_test ADD PRIMARY KEY(b, a) WITH (INDEX = 'rpi_idx_doesnt_exist');
-ERROR:  index "rpi_idx_doesnt_exist" not found
+ERROR:  relation "rpi_idx_doesnt_exist" not found
 ALTER TABLE rpi_test ADD UNIQUE (a);
 NOTICE:  ALTER TABLE / ADD UNIQUE will create implicit index "rpi_test_a_key" for table "rpi_test"
 ALTER TABLE rpi_test ADD PRIMARY KEY(a) WITH (INDEX = 'rpi_test_a_key');
