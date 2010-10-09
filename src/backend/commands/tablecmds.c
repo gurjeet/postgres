@@ -4832,36 +4832,45 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	foreach(l, stmt->options)
 	{
 		DefElem	*def = (DefElem*)lfirst(l);
+		Relation rel;
 
-		if (!(def->defnamespace == NULL && 0 == strcmp(def->defname, "index")))
+		if (def->defnamespace != NULL || strcmp(def->defname, "index") != 0)
 		{
 			prev = l;
 			continue;
 		}
 
-		Assert(strspn(strVal(def->arg), "0123456789") == strlen(strVal(def->arg)));
+		/*
+		 * Set index name in the statement, to affect the constraint name.
+		 * If we don't do it here, that implies DefineIndex() will choose the
+		 * name, and after that it is too late to rename the index to match
+		 * constraint name since doing that will complain 'constraint already
+		 * exists'.
+		 */
 
-		index_oid = DatumGetObjectId(DirectFunctionCall1(oidin,
-										CStringGetDatum(strVal(def->arg))));
+		rel = relation_openrv(stmt->relation, AccessExclusiveLock);
+
+		if (stmt->idxname == NULL)
+		{
+			stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
+											RelationGetNamespace(rel),
+											NULL,
+											stmt->excludeOpNames,
+											true,
+											true);
+		}
+
+		/* Rename index to maintain consistency with the rest of the code */
+		index_oid = get_relname_relid(strVal(def->arg), RelationGetNamespace(rel));
+		RenameRelation(index_oid, stmt->idxname, OBJECT_INDEX);
+
+		relation_close(rel, NoLock);
 
 		/* We override the params set above */
 		skip_build = true;
 		quiet = true; /* We don't want the 'will create implicit index' message */
 
-		/*
-		 * Now we rename the index to have the same name as the constraint. We
-		 * do this for 2 reasons: one, rest of the source code maintains this
-		 * consistency between names of a constraint and its index. Two, this
-		 * allows us to catch the situation where this index is already
-		 * associated with another constraint; so, when the following API tries
-		 * to rename the constraint associated with this index, it'll fail,
-		 * complaining that there is already a constraint by the same name,
-		 * which in our case is the primary key we just created above.
-		 */
-		CommandCounterIncrement();
-
-		RenameRelation(index_oid, stmt->idxname, OBJECT_INDEX);
-
+		/* transform stage has made sure that there's just one WITH INDEX clause */
 		break;
 	}
 

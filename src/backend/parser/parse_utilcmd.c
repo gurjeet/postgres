@@ -1932,7 +1932,6 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		int2	i;	/* iterator for small loops */
 		Oid		pkey_oid;
 		char   *index_name;
-		char   *oid_string;
 
 		ListCell	   *cell;
 		Relation		index_rel;
@@ -1941,7 +1940,8 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 
 		if (def->defnamespace == NULL && 0 == strcmp(def->defname, "index"))
 		{
-			if (!(def->defaction == DEFELEM_UNSPEC || def->defaction == DEFELEM_SET))
+			if (def->defaction != DEFELEM_UNSPEC &&
+				def->defaction != DEFELEM_SET)
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						errmsg("syntax error in PRIMARY KEY clause")));
@@ -1969,27 +1969,19 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 
 		if (!OidIsValid(index_oid))
 			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_TABLE),
-					 errmsg("relation \"%s\" does not exist", index_name)));
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("index \"%s\" not found", index_name)));
+
+		/* Check that it does not have an associated constraint */
+		if (OidIsValid(get_index_constraint(pkey_oid)))
+			ereport(ERROR,
+					(errmsg("index \"%s\" is associated with a constraint",
+								index_name)));
 
 		/* This will throw an error if it is not an index */
 		index_rel = index_open(index_oid, AccessExclusiveLock);
 
-		oid_string = DatumGetCString(DirectFunctionCall1(oidout,
-												ObjectIdGetDatum(index_oid)));
-
-		/*
-		 * Replace index name with its Oid::cstring; ATAddIndex() will use this
-		 * OID for the primary key.
-		 */
-		def->arg = (Node*)makeString(oid_string);
-
-		/* set index name in the statement, to affect the constraint name */
-		if (pkey->idxname == NULL)
-			pkey->idxname = pstrdup(index_name);
-
 		/* Perform validity checks on the index */
-
 		index_tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(index_oid));
 		if (!HeapTupleIsValid(index_tuple))
 			elog(ERROR, "cache lookup failed for index %u", index_oid);
@@ -2105,9 +2097,7 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 			if (pkey->deferrable != con_deferrable
 				|| pkey->initdeferred != con_deferred)
 				ereport(ERROR,
-						(/* TODO: No matching error code in errcodes.h */
-						//errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-						errmsg("cannot change deferrable/initially deferred option"),
+						(errmsg("cannot change deferrable/initially deferred option"),
 						errdetail("new primary key definition changes these"
 									" options from the existing primary key's definition.")));
 
@@ -2140,8 +2130,8 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 				elog(ERROR, "existing primary key and the index do not match");
 
 			/*
-			 * Loop over each attribute in the primary key and see if it
-			 * matches the attributes of the index we are replacing it with.
+			 * See if the primary key matches the attributes of the index we
+			 * are replacing it with.
 			 */
 			for (i = 0; i < pkey_form->indnatts; ++i)
 			{

@@ -15,19 +15,21 @@ CREATE UNIQUE INDEX rpi_idx2 ON rpi_test(a , b);
 
 ALTER TABLE rpi_test ADD primary key(a, b) WITH (INDEX = 'rpi_idx2');
 
-ALTER TABLE rpi_test DROP constraint rpi_idx2;
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey;
 
 DROP INDEX rpi_idx2; -- should fail
 
 ALTER TABLE rpi_test ADD primary key(a, b);
 
-CREATE UNIQUE INDEX rpi_idx3 ON rpi_test(a, b);
+CREATE UNIQUE INDEX rpi_idx3 ON rpi_test(a);
 
-ALTER TABLE rpi_test ADD PRIMARY KEY(a, b) WITH (INDEX = 'rpi_idx3');
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD PRIMARY KEY(a, b) WITH (INDEX = 'rpi_idx3'); -- should fail
+
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD PRIMARY KEY(a) WITH (INDEX = 'rpi_idx3');
 
 CREATE UNIQUE INDEX rpi_idx4 ON rpi_test( a, b );
 
-ALTER TABLE rpi_test ADD PRIMARY KEY(a, b) WITH (INDEX = 'rpi_idx4');
+ALTER TABLE rpi_test DROP CONSTRAINT rpi_test_pkey, ADD PRIMARY KEY(a, b) WITH (INDEX = 'rpi_idx4');
 
 DROP INDEX rpi_idx3; -- should fail
 
