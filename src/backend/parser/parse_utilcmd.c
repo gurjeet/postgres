@@ -1957,19 +1957,14 @@ replacePrimaryKeyIndex(Relation rel, IndexStmt *pkey, List **newcmds)
 		/* Look for the index in the same schema as the table */
 		index_oid = get_relname_relid(index_name, RelationGetNamespace(rel));
 
-		if (!OidIsValid(index_oid))
-			ereport(ERROR,
-					(errcode(ERRCODE_UNDEFINED_OBJECT),
-					 errmsg("index \"%s\" not found", index_name)));
+		/* This will throw an error if it is not an index */
+		index_rel = index_open(index_oid, AccessExclusiveLock);
 
 		/* Check that it does not have an associated constraint */
 		if (OidIsValid(get_index_constraint(index_oid)))
 			ereport(ERROR,
 					(errmsg("index \"%s\" is associated with a constraint",
 								index_name)));
-
-		/* This will throw an error if it is not an index */
-		index_rel = index_open(index_oid, AccessExclusiveLock);
 
 		/* Perform validity checks on the index */
 		index_form = index_rel->rd_index;
