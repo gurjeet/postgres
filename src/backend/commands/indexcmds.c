@@ -69,6 +69,7 @@ static void ComputeIndexAttrs(IndexInfo *indexInfo,
 static Oid GetIndexOpClass(List *opclass, Oid attrType,
 				char *accessMethodName, Oid accessMethodId);
 static char *ChooseIndexNameAddition(List *colnames);
+static bool relationHasPrimaryKey(Relation rel);
 
 /*
  * DefineIndex
@@ -333,7 +334,7 @@ DefineIndex(RangeVar *heapRelation,
 		 * clauses; and CREATE INDEX doesn't have a way to say PRIMARY KEY, so
 		 * it's no problem either.
 		 */
-		if (is_alter_table && OidIsValid(getRelationPrimaryKey(rel)))
+		if (is_alter_table && relationHasPrimaryKey(rel))
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
@@ -1531,15 +1532,14 @@ ChooseIndexColumnNames(List *indexElems)
 }
 
 /*
- * getRelationPrimaryKey -
+ * relationHasPrimaryKey -
  *
  *	See whether an existing relation has a primary key.
  */
-Oid
-getRelationPrimaryKey(Relation rel)
+static bool
+relationHasPrimaryKey(Relation rel)
 {
-	Oid			indexoid = InvalidOid;
-	bool		isprimary = false;
+	bool		result = false;
 	List	   *indexoidlist;
 	ListCell   *indexoidscan;
 
@@ -1554,20 +1554,18 @@ getRelationPrimaryKey(Relation rel)
 	{
 		HeapTuple	indexTuple;
 
-		indexoid = lfirst_oid(indexoidscan);
-
 		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
 		if (!HeapTupleIsValid(indexTuple))		/* should not happen */
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
-		isprimary = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
+		result = ((Form_pg_index) GETSTRUCT(indexTuple))->indisprimary;
 		ReleaseSysCache(indexTuple);
-		if (isprimary)
+		if (result)
 			break;
 	}
 
 	list_free(indexoidlist);
 
-	return isprimary ? indexoid : InvalidOid;
+	return result;
 }
 
 /*

@@ -4853,15 +4853,18 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 		if (stmt->idxname == NULL)
 		{
 			stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
-											RelationGetNamespace(rel),
-											NULL,
-											stmt->excludeOpNames,
-											true,
-											true);
+									RelationGetNamespace(rel),
+									NULL,
+									/* Don't need this, but it doesn't hurt */
+									stmt->excludeOpNames,
+									true,
+									true);
 		}
 
 		/* Rename index to maintain consistency with the rest of the code */
 		index_oid = get_relname_relid(strVal(def->arg), RelationGetNamespace(rel));
+		Assert(OidIsValid(index_oid));
+
 		RenameRelation(index_oid, stmt->idxname, OBJECT_INDEX);
 
 		relation_close(rel, NoLock);
@@ -4896,7 +4899,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 				true,			/* is_alter_table */
 				check_rights,
 				skip_build,
-				index_oid != InvalidOid,
+				OidIsValid(index_oid),
 				quiet,
 				false);
 
@@ -4922,9 +4925,9 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 		heap_freetuple(indexTuple);
 		heap_close(pg_index, RowExclusiveLock);
 
+		/* Make these changes visible to later commands */
 		CommandCounterIncrement();
-
-}
+	}
 }
 
 

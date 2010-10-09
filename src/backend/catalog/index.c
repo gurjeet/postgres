@@ -618,12 +618,11 @@ index_create(Oid heapRelationId,
 		elog(ERROR, "shared relations must be placed in pg_global tablespace");
 
 	/* We don't check existence if index already exists */
-	if (!index_exists)
-		if (get_relname_relid(indexRelationName, namespaceId))
-			ereport(ERROR,
-					(errcode(ERRCODE_DUPLICATE_TABLE),
-					 errmsg("relation \"%s\" already exists",
-							indexRelationName)));
+	if (!index_exists && get_relname_relid(indexRelationName, namespaceId))
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_TABLE),
+				 errmsg("relation \"%s\" already exists",
+						indexRelationName)));
 
 	/*
 	 * construct tuple descriptor for index tuples
