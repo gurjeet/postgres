@@ -336,7 +336,7 @@ static void ATExecDropInherit(Relation rel, RangeVar *parent, LOCKMODE lockmode)
 static void copy_relation_data(SMgrRelation rel, SMgrRelation dst,
 				   ForkNumber forkNum, bool istemp);
 static const char *storage_name(char c);
-static Oid get_pkey_index_oid(IndexStmt *idx_stmt);
+static Oid get_constraint_index_oid(IndexStmt *idx_stmt);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -4800,25 +4800,36 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	}
 }
 /*
- * If the PRIMARY KEY clasue has WITH INDEX option set, then prepare to use
- * that index as the primary key.
+ * If the PRIMARY KEY or UNIQUE clause has WITH INDEX option set, then prepare
+ * to use that index for this constraint.
  */
 static Oid
-get_pkey_index_oid(IndexStmt *idx_stmt)
+get_constraint_index_oid(IndexStmt *idx_stmt)
 {
-	Oid			index_oid = InvalidOid;	/* Oid of the index to create/replace primary key with */
+	Oid			index_oid = InvalidOid;
 	ListCell   *l;
 	ListCell   *prev = NULL;
 	ListCell   *option = NULL;
 	Relation	rel;
 
+	/* We expect only constraint indexes to come until this point */
+	if (!idx_stmt->isconstraint)
+		return InvalidOid;
+
+	/* We support pre-built indexes only on PRIMARY and UNIQUE constraints */
+	if (!idx_stmt->primary && !idx_stmt->unique)
+		return InvalidOid;
+
+	if (idx_stmt->options == NIL)
+		return InvalidOid;
+
 	rel = relation_openrv(idx_stmt->relation, AccessExclusiveLock);
 
 	foreach(l, idx_stmt->options)
 	{
-		DefElem		   *def = (DefElem*)lfirst(l);
 		int				i;
 		char		   *index_name;
+		DefElem		   *def = (DefElem*)lfirst(l);
 		ListCell	   *cell;
 		Relation		index_rel;
 		Form_pg_index	index_form;
@@ -4838,13 +4849,15 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 		if (OidIsValid(index_oid))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
-					errmsg("only one WITH INDEX option can be specified for a primary key")));
+					errmsg("only one WITH INDEX option can be specified for"
+							" a PRIMARY KEY/UNIQUE constraint")));
 
 		if (!IsA(def->arg, String))
 				ereport(ERROR,
 						(errcode(ERRCODE_SYNTAX_ERROR),
 						errmsg("syntax error"),
-						errdetail("WITH INDEX option for primary key should be a string value.")));
+						errdetail("WITH INDEX option in a PRIMARY KEY/UNIQUE"
+									" constraint should be a string value.")));
 
 		index_name = strVal(def->arg);
 
@@ -4868,6 +4881,10 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 		/* Perform validity checks on the index */
 		index_form = index_rel->rd_index;
 
+		if (index_form->indrelid != RelationGetRelid(rel))
+			elog(ERROR, "index \"%s\" does not belong to \"%s\"",
+							index_name, RelationGetRelationName(rel));
+
 		if (!index_form->indisvalid)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
@@ -4878,32 +4895,33 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					errmsg("index \"%s\" is not ready", index_name)));
 
-		if (index_form->indrelid != RelationGetRelid(rel))
-			elog(ERROR, "index \"%s\" belongs some other table", index_name);
-
 		if (!index_form->indisunique)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					errmsg("\"%s\" is not a unique index", index_name),
-					errdetail("cannot create primary key using a non-unique index.")));
+					errdetail("cannot create PRIMARY KEY/UNIQUE constraint"
+								" with a non-unique index.")));
 
 		if (index_rel->rd_indextuple != NULL &&
 			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indexprs))
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					errmsg("index \"%s\" contains expressions", index_name),
-					errdetail("cannot create primary key using an expression index.")));
+					errdetail("cannot create PRIMARY KEY/UNIQUE constraint"
+								" using an expression index.")));
 
 		if (index_rel->rd_indextuple != NULL &&
 			!heap_attisnull(index_rel->rd_indextuple, Anum_pg_index_indpred))
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					errmsg("\"%s\" is a partial index", index_name),
-					errdetail("cannot create primary key using a partial index.")));
+					errdetail("cannot create PRIMARY KEY/UNIQUE constraint"
+								" using a partial index.")));
 
 		/* Match the PRIMARY KEY clasue from the ALTER statement with the index */
 		if (index_form->indnatts != list_length(idx_stmt->indexParams))
-			elog(ERROR, "primary key definition does not match the index");
+			elog(ERROR, "PRIMARY KEY/UNIQUE constraint definition does not"
+						" match the index");
 
 		/* XXX: Assert here? */
 		if (index_form->indnatts > rel->rd_att->natts)
@@ -4917,25 +4935,20 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 			int16		attnum = index_form->indkey.values[i];
 			char	   *attname;
 
-			if (elem->name == NULL)
-			{
-				Assert(elem->expr != NULL);
-
-				/* Grammar already prevents this by disallowing expressions. */
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("PRIMARY KEY clause contains expressions"),
-						errdetail("cannot create primary key using an expression index.")));
-			}
+			/* Grammar already prevents this by disallowing expressions. */
+			Assert(elem->name != NULL);
 
 			/*
 			 * We need not worry about attisdropped, since this index's
 			 * existence guarantees that the column exists.
 			 */
+			Assert(!rel->rd_att->attrs[attnum-1]->attisdropped);
+
 			attname = NameStr(rel->rd_att->attrs[attnum-1]->attname);
 
 			if (strcmp(elem->name, attname) != 0)
-				elog(ERROR, "index columns do not match primary key definition");
+				elog(ERROR, "index columns do not match PRIMARY KEY/UNIQUE"
+							" constraint definition");
 
 			++i;
 		}
@@ -4968,10 +4981,10 @@ get_pkey_index_oid(IndexStmt *idx_stmt)
 		{
 			idx_stmt->idxname = ChooseIndexName(RelationGetRelationName(rel),
 										RelationGetNamespace(rel),
-										NULL,
+										ChooseIndexColumnNames(idx_stmt->indexParams),
 										/* Don't need this, but it won't hurt */
 										idx_stmt->excludeOpNames,
-										true,
+										idx_stmt->primary,
 										true);
 		}
 
@@ -4999,6 +5012,7 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	bool		check_rights;
 	bool		skip_build;
 	bool		quiet;
+	bool		index_exists = false;
 	Oid			index_oid = InvalidOid;
 
 	Assert(IsA(stmt, IndexStmt));
@@ -5010,19 +5024,18 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 	/* suppress notices when rebuilding existing index */
 	quiet = is_rebuild;
 
-	if (stmt->primary && stmt->options)
+	/* Check if user wanted us to use an existing index */
+	index_oid = get_constraint_index_oid(stmt);
+
+	if (OidIsValid(index_oid))
 	{
-		index_oid = get_pkey_index_oid(stmt);
+		index_exists = true;
 
-		/* If we have the WITH INDEX option set, use that for the primary key */
-		if (OidIsValid(index_oid))
-		{
-			/* We override the params set above */
-			skip_build = true;
+		/* We override the params set above */
+		skip_build = true;
 
-			/* We don't want the 'will create implicit index' message */
-			quiet = true;
-		}
+		/* We don't want the 'will create implicit index' message */
+		quiet = true;
 	}
 
 	/* The IndexStmt has already been through transformIndexStmt */
@@ -5044,15 +5057,15 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 				true,			/* is_alter_table */
 				check_rights,
 				skip_build,
-				OidIsValid(index_oid),
+				index_exists,
 				quiet,
 				false);
 
 	/*
 	 * Mark the index as indisprimary. We can't do this before DefineIndex()
-	 * because it complains about duplicate primary key.
+	 * because then it complains about duplicate primary key.
 	 */
-	if (stmt->primary && OidIsValid(index_oid))
+	if (index_exists)
 	{
 		Relation		pg_index;
 		HeapTuple		indexTuple;
@@ -5066,7 +5079,9 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 			elog(ERROR, "cache lookup failed for index %u", index_oid);
 		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
 
-		indexForm->indisprimary = true;
+		indexForm->indisprimary = stmt->primary;
+		indexForm->indisunique = stmt->unique;
+
 		simple_heap_update(pg_index, &indexTuple->t_self, indexTuple);
 		CatalogUpdateIndexes(pg_index, indexTuple);
 
