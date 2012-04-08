@@ -157,6 +157,7 @@ static Backend *ShmemBackendArray;
 
 /* The socket number we are listening for connections on */
 int			PostPortNumber;
+int			ws_port_number;
 char	   *UnixSocketDir;
 char	   *ListenAddresses;
 
@@ -174,6 +175,7 @@ int			ReservedBackends;
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
 static pgsocket ListenSocket[MAXLISTEN];
+static bool IsWSSocket[MAXLISTEN];
 
 /*
  * Set by the -o option
@@ -416,6 +418,7 @@ typedef struct
 	InheritableSocket portsocket;
 	char		DataDir[MAXPGPATH];
 	pgsocket	ListenSocket[MAXLISTEN];
+	bool		IsWSSocket[MAXLISTEN]; /* TODO: Handle this new member wherever BackendParameters struct is handled */
 	long		MyCancelKey;
 	int			MyPMChildSlot;
 #ifndef WIN32
@@ -844,6 +847,8 @@ PostmasterMain(int argc, char *argv[])
 		List	   *elemlist;
 		ListCell   *l;
 		int			success = 0;
+		int			port_number = PostPortNumber;
+		bool		ws_port_done = false;
 
 		/* Need a modifiable copy of ListenAddresses */
 		rawstring = pstrdup(ListenAddresses);
@@ -857,18 +862,19 @@ PostmasterMain(int argc, char *argv[])
 					 errmsg("invalid list syntax for \"listen_addresses\"")));
 		}
 
+open_ports:
 		foreach(l, elemlist)
 		{
 			char	   *curhost = (char *) lfirst(l);
 
 			if (strcmp(curhost, "*") == 0)
 				status = StreamServerPort(AF_UNSPEC, NULL,
-										  (unsigned short) PostPortNumber,
+										  (unsigned short) port_number,
 										  UnixSocketDir,
 										  ListenSocket, MAXLISTEN);
 			else
 				status = StreamServerPort(AF_UNSPEC, curhost,
-										  (unsigned short) PostPortNumber,
+										  (unsigned short) port_number,
 										  UnixSocketDir,
 										  ListenSocket, MAXLISTEN);
 
@@ -881,11 +887,26 @@ PostmasterMain(int argc, char *argv[])
 					AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
 					listen_addr_saved = true;
 				}
+
+				if (port_number == ws_port_number)
+					IsWSSocket[i] == true;
 			}
 			else
 				ereport(WARNING,
 						(errmsg("could not create listen socket for \"%s\"",
 								curhost)));
+		}
+
+		if (!ws_port_done && ws_port_number != 0)
+		{
+			/*
+			 * We do not support WebSockets on the same port as the regularxi
+			 * sockets.
+			 */
+			assert(ws_port_number != PostPortNumber);
+			port_number = ws_port_number;
+			ws_port_done = true;
+			goto open_ports;
 		}
 
 		if (!success && list_length(elemlist))
@@ -1457,6 +1478,9 @@ ServerLoop(void)
 					port = ConnCreate(ListenSocket[i]);
 					if (port)
 					{
+						if (IsWSSocket[i])
+							port->usingWebSockets = true;
+
 						BackendStartup(port);
 
 						/*
@@ -1565,6 +1589,10 @@ initMasks(fd_set *rmask)
 	return maxsock + 1;
 }
 
+static void
+WebSocketsHandshake(Port *port)
+{
+}
 
 /*
  * Read a client's startup packet and do something according to it.
@@ -1584,6 +1612,9 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 	void	   *buf;
 	ProtocolVersion proto;
 	MemoryContext oldcontext;
+
+	if (port->usingWebSockets && !SSLdone)
+		WebSocketsHandshake(port);
 
 	if (pq_getbytes((char *) &len, 4) == EOF)
 	{

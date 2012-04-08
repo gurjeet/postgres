@@ -168,6 +168,8 @@ typedef struct Port
 	void	   *gss;
 #endif
 
+	bool		usingWebSockets;
+
 	/*
 	 * SSL structures (keep these last so that USE_SSL doesn't affect
 	 * locations of other fields)
