@@ -158,7 +158,6 @@ static Backend *ShmemBackendArray;
 
 /* The socket number we are listening for connections on */
 int			PostPortNumber;
-int			ws_port_number;
 char	   *UnixSocketDir;
 char	   *ListenAddresses;
 
@@ -176,7 +175,6 @@ int			ReservedBackends;
 /* The socket(s) we're listening to. */
 #define MAXLISTEN	64
 static pgsocket ListenSocket[MAXLISTEN];
-static bool IsWSSocket[MAXLISTEN];
 
 /*
  * Set by the -o option
@@ -419,7 +417,6 @@ typedef struct
 	InheritableSocket portsocket;
 	char		DataDir[MAXPGPATH];
 	pgsocket	ListenSocket[MAXLISTEN];
-	bool		IsWSSocket[MAXLISTEN]; /* TODO: Handle this new member wherever BackendParameters struct is handled */
 	long		MyCancelKey;
 	int			MyPMChildSlot;
 #ifndef WIN32
@@ -848,8 +845,6 @@ PostmasterMain(int argc, char *argv[])
 		List	   *elemlist;
 		ListCell   *l;
 		int			success = 0;
-		int			port_number = PostPortNumber;
-		bool		ws_port_done = false;
 
 		/* Need a modifiable copy of ListenAddresses */
 		rawstring = pstrdup(ListenAddresses);
@@ -863,19 +858,18 @@ PostmasterMain(int argc, char *argv[])
 					 errmsg("invalid list syntax for \"listen_addresses\"")));
 		}
 
-open_ports:
 		foreach(l, elemlist)
 		{
 			char	   *curhost = (char *) lfirst(l);
 
 			if (strcmp(curhost, "*") == 0)
 				status = StreamServerPort(AF_UNSPEC, NULL,
-										  (unsigned short) port_number,
+										  (unsigned short) PostPortNumber,
 										  UnixSocketDir,
 										  ListenSocket, MAXLISTEN);
 			else
 				status = StreamServerPort(AF_UNSPEC, curhost,
-										  (unsigned short) port_number,
+										  (unsigned short) PostPortNumber,
 										  UnixSocketDir,
 										  ListenSocket, MAXLISTEN);
 
@@ -888,26 +882,11 @@ open_ports:
 					AddToDataDirLockFile(LOCK_FILE_LINE_LISTEN_ADDR, curhost);
 					listen_addr_saved = true;
 				}
-
-				if (port_number == ws_port_number)
-					IsWSSocket[i] == true;
 			}
 			else
 				ereport(WARNING,
 						(errmsg("could not create listen socket for \"%s\"",
 								curhost)));
-		}
-
-		if (!ws_port_done && ws_port_number != 0)
-		{
-			/*
-			 * We do not support WebSockets on the same port as the regular
-			 * sockets.
-			 */
-			Assert(ws_port_number != PostPortNumber);
-			port_number = ws_port_number;
-			ws_port_done = true;
-			goto open_ports;
 		}
 
 		if (!success && list_length(elemlist))
@@ -1479,9 +1458,6 @@ ServerLoop(void)
 					port = ConnCreate(ListenSocket[i]);
 					if (port)
 					{
-						if (IsWSSocket[i])
-							port->usingWebSockets = true;
-
 						BackendStartup(port);
 
 						/*
@@ -1663,6 +1639,7 @@ http_header_find_field_value(char *header, char *field_name, char *value)
 	return value_start;
 }
 
+/* Same return code as pq_getbytes() */
 static int
 WebSocketsHandshake(Port *port)
 {
@@ -1734,6 +1711,42 @@ WebSocketsHandshake(Port *port)
 }
 
 /*
+ * 'GET ' => HEX(47 45 54 20) => BigEndian(47455420) => LittleEndian(20544547)
+ *                               Decimal(1195725856)    Decimal(542393671)
+ */
+static bool
+DetectAndProcessWebSockets(Port *port, char **p_buffer, int *p_len)
+{
+	static bool webSocketsDetectionDone = false;
+	static bool usingWebsockets = false;
+
+	int32 len;
+	char *http_header = &len;
+
+	if (webSocketsDetectionDone)
+		goto DONE_OK;
+
+	webSocketsDetectionDone = true;
+
+	if (pq_getbytes((char *) &len, 4) == EOF)
+	{
+		ereport(COMMERROR,
+				(errcode(ERRCODE_PROTOCOL_VIOLATION),
+				 errmsg("incomplete startup packet")));
+		return STATUS_ERROR;
+	}
+#error Developing here
+	if (strcmp(http_header, "GET ") == 0)
+	{
+		if (WebSocketsHandshake(port) == 0)
+			goto DONE_OK;
+	}
+
+DONE_OK:
+	return pq_getbytes(*p_buffer, p_len);
+}
+
+/*
  * Read a client's startup packet and do something according to it.
  *
  * Returns STATUS_OK or STATUS_ERROR, or might call ereport(FATAL) and
@@ -1744,6 +1757,7 @@ WebSocketsHandshake(Port *port)
  * send anything to the client, which would typically be appropriate
  * if we detect a communications failure.)
  */
+
 static int
 ProcessStartupPacket(Port *port, bool SSLdone)
 {
@@ -1752,8 +1766,7 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 	ProtocolVersion proto;
 	MemoryContext oldcontext;
 
-	if (port->usingWebSockets && !SSLdone)
-		WebSocketsHandshake(port);
+	DetectAndProcessWebSockets(Port);
 
 	if (pq_getbytes((char *) &len, 4) == EOF)
 	{
