@@ -1647,9 +1647,7 @@ WebSocketsHandshake(Port *port)
 	char c;
 	char *keystart;
 	char *keyend;
-	StringInfo header;
-
-	initStringInfo(header);
+	StringInfo header = makeStringInfo();
 
 	while ((rc = pq_getbytes(&c, 1)) != EOF)
 	{
@@ -1680,10 +1678,10 @@ WebSocketsHandshake(Port *port)
 	if (rc == EOF)
 		return EOF;
 
-	if (http_header_find_field_value(header, "Upgrade", "websocket") == NULL
-		|| http_header_find_field_value(header, "Connection", "Upgrade") == NULL
+	if (http_header_find_field_value(header->data, "Upgrade", "websocket") == NULL
+		|| http_header_find_field_value(header->data, "Connection", "Upgrade") == NULL
 		|| (keystart =
-			http_header_find_field_value(header, "Sec-WebSocket-Key", NULL)) == NULL)
+			http_header_find_field_value(header->data, "Sec-WebSocket-Key", NULL)) == NULL)
 	{
 		ereport(FATAL,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -1708,23 +1706,29 @@ WebSocketsHandshake(Port *port)
 				 errmsg("WebSockets handshake: Invalid value in Sec-WebSocket-Key.")));
 		return EOF;
 	}
+
+	return 0;
 }
 
+enum {
+	WEBSOCKETS_NOT_DETECTED,
+	WEBSOCKETS_DETECTED,
+	WEBSOCKETS_REJECTED,
+};
 /*
  * 'GET ' => HEX(47 45 54 20) => BigEndian(47455420) => LittleEndian(20544547)
  *                               Decimal(1195725856)    Decimal(542393671)
  */
 static bool
-DetectAndProcessWebSockets(Port *port, char **p_buffer, int *p_len)
+DetectAndProcessWebSockets(Port *port, int32 *first4bytes, bool *SSLdone)
 {
 	static bool webSocketsDetectionDone = false;
-	static bool usingWebsockets = false;
 
 	int32 len;
-	char *http_header = &len;
+	char *http_header;
 
 	if (webSocketsDetectionDone)
-		goto DONE_OK;
+		return WEBSOCKETS_NOT_DETECTED;
 
 	webSocketsDetectionDone = true;
 
@@ -1733,17 +1737,27 @@ DetectAndProcessWebSockets(Port *port, char **p_buffer, int *p_len)
 		ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg("incomplete startup packet")));
-		return STATUS_ERROR;
+		return STATUS_ERROR;	/* Keep compiler quiet */
 	}
-#error Developing here
+
+	http_header = (char*) &len;
+
 	if (strcmp(http_header, "GET ") == 0)
 	{
 		if (WebSocketsHandshake(port) == 0)
-			goto DONE_OK;
+			return WEBSOCKETS_DETECTED;
+		else
+		{
+			ereport(COMMERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("incomplete startup packet")));
+			return STATUS_ERROR;	/* Keep compiler quiet */
+		}
 	}
-
-DONE_OK:
-	return pq_getbytes(*p_buffer, p_len);
+	else if (http_header[0] == 22)
+	{
+		/* Looks like SSL startup sequence */
+	}
 }
 
 /*
@@ -1766,7 +1780,7 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 	ProtocolVersion proto;
 	MemoryContext oldcontext;
 
-	DetectAndProcessWebSockets(Port);
+	DetectAndProcessWebSockets(port, &len, &SSLdone);
 
 	if (pq_getbytes((char *) &len, 4) == EOF)
 	{

@@ -67,6 +67,9 @@ extern void pq_putmessage_noblock(char msgtype, const char *s, size_t len);
 extern void pq_startcopyout(void);
 extern void pq_endcopyout(bool errorAbort);
 
+extern bool		pq_pushback_bytes(char *src, size_t len);
+extern size_t	pq_read_pushedback_bytes(char *dest, size_t *limit);
+
 /*
  * prototypes for functions in be-secure.c
  */

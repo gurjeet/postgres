@@ -931,6 +931,42 @@ pq_getbyte_if_available(unsigned char *c)
 	return r;
 }
 
+#define MAX_PUSHBACK_BYTES 8
+static char pushback_buffer[MAX_PUSHBACK_BYTES];
+static size_t pushback_buffer_len = 0;
+
+bool
+pq_pushback_bytes(char *src, size_t len)
+{
+	if (len < 0 || len + pushback_buffer_len > MAX_PUSHBACK_BYTES)
+		return false;
+
+	memcpy(pushback_buffer + pushback_buffer_len, src, len);
+
+	pushback_buffer_len += len;
+
+	return true;
+}
+
+size_t
+pq_read_pushedback_bytes(char *dest, size_t *limit)
+{
+	size_t bytes_to_read;
+
+	if (pushback_buffer_len == 0 || *limit == 0)
+		return 0;
+
+	bytes_to_read = pushback_buffer_len < *limit ? pushback_buffer_len : *limit;
+
+	memcpy(dest, pushback_buffer, bytes_to_read);
+	memmove(pushback_buffer + bytes_to_read, pushback_buffer, bytes_to_read);
+
+	pushback_buffer_len -= bytes_to_read;
+	*limit -= bytes_to_read;
+
+	return bytes_to_read;
+}
+
 /* --------------------------------
  *		pq_getbytes		- get a known number of bytes from connection
  *
