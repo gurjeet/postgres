@@ -1573,7 +1573,7 @@ initMasks(fd_set *rmask)
  * start of that value, else we simply return the start of values list.
  */
 static char*
-http_header_find_field_value(char *header, char *field_name, char *value)
+http_find_field(char *header, char *field_name, char *value)
 {
 	char *header_end,
 		 *field_start,
@@ -1643,16 +1643,16 @@ http_header_find_field_value(char *header, char *field_name, char *value)
 static int
 WebSocketsHandshake(Port *port)
 {
-	int rc;
-	char c;
+	int c;
 	char *keystart;
 	char *keyend;
 	StringInfo header = makeStringInfo();
 
-	while ((rc = pq_getbytes(&c, 1)) != EOF)
+	while ((c = pq_getbyte()) != EOF)
 	{
-		appendStringInfoChar(header, c);
+		appendStringInfoChar(header, (char)c);
 
+		/* We expect at least 4 bytes to conclude we have end of HTTP header */
 		if (header->len < 4)
 			continue;
 
@@ -1675,13 +1675,12 @@ WebSocketsHandshake(Port *port)
 		}
 	}
 
-	if (rc == EOF)
+	if (c == EOF)
 		return EOF;
 
-	if (http_header_find_field_value(header->data, "Upgrade", "websocket") == NULL
-		|| http_header_find_field_value(header->data, "Connection", "Upgrade") == NULL
-		|| (keystart =
-			http_header_find_field_value(header->data, "Sec-WebSocket-Key", NULL)) == NULL)
+	if (http_find_field(header->data, "Upgrade", "websocket") == NULL
+		|| http_find_field(header->data, "Connection", "Upgrade") == NULL
+		|| (keystart = http_find_field(header->data, "Sec-WebSocket-Key", NULL)) == NULL)
 	{
 		ereport(FATAL,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
@@ -1710,34 +1709,36 @@ WebSocketsHandshake(Port *port)
 	return 0;
 }
 
-enum {
-	WEBSOCKETS_NOT_DETECTED,
-	WEBSOCKETS_DETECTED,
-	WEBSOCKETS_REJECTED,
-};
 /*
+ * char(22) => HEX(16 00 00 00) => BigEndian(16000000) => LittleEndian(00000016)
+ *									Decimal(369098752)		Decimal(22)
+ *
  * 'GET ' => HEX(47 45 54 20) => BigEndian(47455420) => LittleEndian(20544547)
  *                               Decimal(1195725856)    Decimal(542393671)
  */
-static bool
-DetectAndProcessWebSockets(Port *port, int32 *first4bytes, bool *SSLdone)
+static int
+DetectAndProcessWebSockets(Port *port, char *first4bytes, bool *SSLdone)
 {
-	static bool webSocketsDetectionDone = false;
-
+	int c;
 	int32 len;
 	char *http_header;
 
-	if (webSocketsDetectionDone)
-		return WEBSOCKETS_NOT_DETECTED;
-
-	webSocketsDetectionDone = true;
-
-	if (pq_getbytes((char *) &len, 4) == EOF)
+	if ((c = pq_getbyte()) == EOF)
 	{
 		ereport(COMMERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg("incomplete startup packet")));
-		return STATUS_ERROR;	/* Keep compiler quiet */
+		return STATUS_ERROR;
+	}
+
+	if (c == 22)
+	{
+		/* Looks like SSL startup sequence */
+
+		if (pq_pushback_bytes(&(char)len, 1) == false)
+			return STATUS_ERROR;
+
+		return negotiateSSL(port, true);
 	}
 
 	http_header = (char*) &len;
@@ -1745,21 +1746,63 @@ DetectAndProcessWebSockets(Port *port, int32 *first4bytes, bool *SSLdone)
 	if (strcmp(http_header, "GET ") == 0)
 	{
 		if (WebSocketsHandshake(port) == 0)
-			return WEBSOCKETS_DETECTED;
+			return;
 		else
 		{
 			ereport(COMMERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),
 					 errmsg("incomplete startup packet")));
-			return STATUS_ERROR;	/* Keep compiler quiet */
+			return STATUS_ERROR;
 		}
 	}
 	else if (http_header[0] == 22)
 	{
 		/* Looks like SSL startup sequence */
 	}
+	else
+	{
+		pq_pushback_bytes(&len, 4);
+	}
 }
 
+static int
+negotiateSSL(Port *port, bool doingWebSockets)
+{
+	char		SSLok;
+
+#ifdef USE_SSL
+	/* No SSL when disabled or on Unix sockets */
+	if (!EnableSSL || IS_AF_UNIX(port->laddr.addr.ss_family))
+		SSLok = 'N';
+	else
+		SSLok = 'S';		/* Support for SSL */
+#else
+	SSLok = 'N';			/* No support for SSL */
+#endif
+
+	if (doingWebSockets)
+	{
+		if (SSLok == 'N')
+			return STATUS_ERROR;
+	}
+retry1:
+	else if (send(port->sock, &SSLok, 1, 0) != 1)
+	{
+		if (errno == EINTR)
+			goto retry1;	/* if interrupted, just retry */
+		ereport(COMMERROR,
+				(errcode_for_socket_access(),
+				 errmsg("failed to send SSL negotiation response: %m")));
+		return STATUS_ERROR;	/* close the connection */
+	}
+
+#ifdef USE_SSL
+	if (SSLok == 'S' && secure_open_server(port) == -1)
+		return STATUS_ERROR;
+#endif
+
+	return STATUS_OK;
+}
 /*
  * Read a client's startup packet and do something according to it.
  *
@@ -1780,7 +1823,14 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 	ProtocolVersion proto;
 	MemoryContext oldcontext;
 
-	DetectAndProcessWebSockets(port, &len, &SSLdone);
+	/* Detect WebSockets protocol only if SSL handshake hasn't been done yet */
+	if (!SSLdone)
+	{
+		int rc = DetectAndProcessWebSockets(port, &len, &SSLdone);
+
+		if (rc != STATUS_OK)
+			return rc;
+	}
 
 	if (pq_getbytes((char *) &len, 4) == EOF)
 	{
@@ -1842,33 +1892,11 @@ ProcessStartupPacket(Port *port, bool SSLdone)
 
 	if (proto == NEGOTIATE_SSL_CODE && !SSLdone)
 	{
-		char		SSLok;
+		int rc = negotiateSSL(port, false);
 
-#ifdef USE_SSL
-		/* No SSL when disabled or on Unix sockets */
-		if (!EnableSSL || IS_AF_UNIX(port->laddr.addr.ss_family))
-			SSLok = 'N';
-		else
-			SSLok = 'S';		/* Support for SSL */
-#else
-		SSLok = 'N';			/* No support for SSL */
-#endif
+		if (rc != STATUS_OK)
+			return rc;
 
-retry1:
-		if (send(port->sock, &SSLok, 1, 0) != 1)
-		{
-			if (errno == EINTR)
-				goto retry1;	/* if interrupted, just retry */
-			ereport(COMMERROR,
-					(errcode_for_socket_access(),
-					 errmsg("failed to send SSL negotiation response: %m")));
-			return STATUS_ERROR;	/* close the connection */
-		}
-
-#ifdef USE_SSL
-		if (SSLok == 'S' && secure_open_server(port) == -1)
-			return STATUS_ERROR;
-#endif
 		/* regular startup packet, cancel, etc packet should follow... */
 		/* but not another SSL negotiation request */
 		return ProcessStartupPacket(port, true);

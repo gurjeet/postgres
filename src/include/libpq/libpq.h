@@ -68,7 +68,7 @@ extern void pq_startcopyout(void);
 extern void pq_endcopyout(bool errorAbort);
 
 extern bool		pq_pushback_bytes(char *src, size_t len);
-extern size_t	pq_read_pushedback_bytes(char *dest, size_t *limit);
+extern size_t	pq_getbytes_buffered_only(char *s, size_t len);
 
 /*
  * prototypes for functions in be-secure.c

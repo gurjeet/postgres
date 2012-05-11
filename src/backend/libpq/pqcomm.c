@@ -931,40 +931,48 @@ pq_getbyte_if_available(unsigned char *c)
 	return r;
 }
 
-#define MAX_PUSHBACK_BYTES 8
-static char pushback_buffer[MAX_PUSHBACK_BYTES];
-static size_t pushback_buffer_len = 0;
 
 bool
 pq_pushback_bytes(char *src, size_t len)
 {
-	if (len < 0 || len + pushback_buffer_len > MAX_PUSHBACK_BYTES)
+	/* Check if there's enough space available in the receive-buffer */
+	if (PqRecvLength - PqRecvBuffer + len > PQ_RECV_BUFFER_SIZE)
 		return false;
 
-	memcpy(pushback_buffer + pushback_buffer_len, src, len);
+	if (PqRecvPointer > 0)
+	{
+		if (PqRecvLength > PqRecvPointer)
+		{
+			/* still some unread data, left-justify it in the buffer */
+			memmove(PqRecvBuffer, PqRecvBuffer + PqRecvPointer,
+					PqRecvLength - PqRecvPointer);
+			PqRecvLength -= PqRecvPointer;
+			PqRecvPointer = 0;
+		}
+		else
+			PqRecvLength = PqRecvPointer = 0;
+	}
 
-	pushback_buffer_len += len;
+	memcpy(PqRecvBuffer + PqRecvLength, src, len);
 
 	return true;
 }
 
 size_t
-pq_read_pushedback_bytes(char *dest, size_t *limit)
+pq_getbytes_buffered_only(char *s, size_t len)
 {
-	size_t bytes_to_read;
+	size_t amount;
 
-	if (pushback_buffer_len == 0 || *limit == 0)
+	if (PqRecvPointer >= PqRecvLength)
 		return 0;
 
-	bytes_to_read = pushback_buffer_len < *limit ? pushback_buffer_len : *limit;
+	amount = PqRecvLength - PqRecvPointer;
+	if (amount > len)
+		amount = len;
+	memcpy(s, PqRecvBuffer + PqRecvPointer, amount);
+	PqRecvPointer += amount;
 
-	memcpy(dest, pushback_buffer, bytes_to_read);
-	memmove(pushback_buffer + bytes_to_read, pushback_buffer, bytes_to_read);
-
-	pushback_buffer_len -= bytes_to_read;
-	*limit -= bytes_to_read;
-
-	return bytes_to_read;
+	return amount;
 }
 
 /* --------------------------------

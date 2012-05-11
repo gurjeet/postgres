@@ -426,7 +426,18 @@ my_sock_read(BIO *h, char *buf, int size)
 
 	if (buf != NULL)
 	{
-		res = recv(h->num, buf, size, 0);
+		size_t read = pq_getbytes_buffered_only(buf, len);
+
+		Assert(read <= len);
+
+		if (read != 0 && read != len)
+		{
+			len -= read;
+			buf += read;
+
+			res = recv(h->num, buf, size, 0);
+		}
+
 		BIO_clear_retry_flags(h);
 		if (res <= 0)
 		{
