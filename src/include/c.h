@@ -622,10 +622,7 @@ typedef NameData *Name;
 			(_len & LONG_ALIGN_MASK) == 0 && \
 			_val == 0 && \
 			_len <= MEMSET_LOOP_LIMIT && \
-			/* \
-			 *	If MEMSET_LOOP_LIMIT == 0, optimizer should find \
-			 *	the whole "if" false at compile time. \
-			 */ \
+			/*  If MEMSET_LOOP_LIMIT == 0, optimizer should find the whole "if" false at compile time. */ \
 			MEMSET_LOOP_LIMIT != 0) \
 		{ \
 			long *_start = (long *) _vstart; \

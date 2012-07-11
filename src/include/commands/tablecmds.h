@@ -50,7 +50,10 @@ extern void renameatt(RenameStmt *stmt);
 
 extern void RenameConstraint(RenameStmt *stmt);
 
+extern void ReplaceIndexFileNode(RenameStmt *stmt);
+
 extern void RenameRelation(RenameStmt *stmt);
+
 
 extern void RenameRelationInternal(Oid myrelid,
 					   const char *newrelname);

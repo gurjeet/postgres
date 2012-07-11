@@ -6759,6 +6759,26 @@ RenameStmt: ALTER AGGREGATE func_name aggr_args RENAME TO name
 					n->missing_ok = true;
 					$$ = (Node *)n;
 				}
+			| ALTER INDEX qualified_name REPLACE WITH name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_INDEX;
+					n->relationType = OBJECT_INDEX;
+					n->relation = $3;
+					n->newname = $6;
+					n->missing_ok = false;
+					$$ = (Node *)n;
+				}
+			| ALTER INDEX IF_P EXISTS qualified_name REPLACE WITH name
+				{
+					RenameStmt *n = makeNode(RenameStmt);
+					n->renameType = OBJECT_INDEX;
+					n->relationType = OBJECT_INDEX;
+					n->relation = $5;
+					n->newname = $8;
+					n->missing_ok = true;
+					$$ = (Node *)n;
+				}
 			| ALTER FOREIGN TABLE relation_expr RENAME TO name
 				{
 					RenameStmt *n = makeNode(RenameStmt);

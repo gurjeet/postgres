@@ -2412,6 +2412,146 @@ RenameConstraint(RenameStmt *stmt)
 }
 
 /*
+ * Execute ALTER INDEX REPLACE WITH
+ */
+void
+ReplaceIndexFileNode(RenameStmt *stmt)
+{
+	Oid				srcOid,
+					dstOid;
+	Relation		srcRel,
+					dstRel;
+	Form_pg_index	srcFrm,
+					dstFrm;
+
+	/*
+	 * Grab an exclusive lock on the target index which we will NOT release
+	 * until end of transaction.
+	 */
+	dstOid = RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
+									  stmt->missing_ok, false,
+									  RangeVarCallbackForAlterRelation,
+									  (void *) stmt);
+
+	/*
+	 * If not found, and missing_ok, bail with a notice.
+	 *
+	 * If !missing_ok then above call would have thrown the error instead of
+	 * returning InvalidOid.
+	 */
+	if (OidIsValid(dstOid) && stmt->missing_ok)
+	{
+		ereport(NOTICE,
+		(errmsg("index \"%s\" does not exist, skipping", stmt->newname)));
+	}
+
+	/* Open the dest index (this will throw an error if it is not an index) */
+	dstRel = index_open(dstOid, NoLock);
+	dstFrm = dstRel->rd_index;
+
+	/* Look for the source index in the same schema as the destination */
+	srcOid = get_relname_relid(stmt->newname, RelationGetNamespace(dstRel));
+
+	/* We don't honor missing_ok here */
+	if (!OidIsValid(srcOid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("index \"%s\" does not exist", stmt->newname)));
+
+	/* Open the source index (this will throw an error if it is not an index) */
+	srcRel = index_open(srcOid, AccessExclusiveLock);
+	srcFrm = srcRel->rd_index;
+
+	/* Check that source is not associated with a constraint */
+	if (OidIsValid(get_index_constraint(srcOid)))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is associated with a constraint",
+						stmt->newname)));
+
+	/* Perform validity checks on the source index */
+	if (srcFrm->indrelid != dstFrm->indrelid)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("indexes do not belong to the same table")));
+
+	if (!srcFrm->indisvalid)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not valid", stmt->newname)));
+
+	if (!dstFrm->indisvalid)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not valid", stmt->relation->relname)));
+
+	if (!srcFrm->indisready)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not ready", stmt->newname)));
+
+	if (!dstFrm->indisready)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not ready", stmt->relation->relname)));
+
+#if 0
+	/* Must get indclass the hard way */
+	indclassDatum = SysCacheGetAttr(INDEXRELID, srcFrm->indexrelid,
+	Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) DatumGetPointer(indclassDatum);
+	
+	for (i = 0; i < index_form->indnatts; i++)
+	{
+	int16		attnum = index_form->indkey.values[i];
+	Form_pg_attribute attform;
+	char	   *attname;
+	Oid			defopclass;
+	
+	/*
+	 * We shouldn't see attnum == 0 here, since we already rejected
+	 * expression indexes.	If we do, SystemAttributeDefinition will
+	 * throw an error.
+	 */
+	if (attnum > 0)
+	{
+	Assert(attnum <= heap_rel->rd_att->natts);
+	attform = heap_rel->rd_att->attrs[attnum - 1];
+	}
+	else
+	attform = SystemAttributeDefinition(attnum,
+	   heap_rel->rd_rel->relhasoids);
+	attname = pstrdup(NameStr(attform->attname));
+	
+	/*
+	 * Insist on default opclass and sort options.	While the index
+	 * would still work as a constraint with non-default settings, it
+	 * might not provide exactly the same uniqueness semantics as
+	 * you'd get from a normally-created constraint; and there's also
+	 * the dump/reload problem mentioned above.
+	 */
+	defopclass = GetDefaultOpClass(attform->atttypid,
+	   index_rel->rd_rel->relam);
+	if (indclass->values[i] != defopclass ||
+	index_rel->rd_indoption[i] != 0)
+	ereport(ERROR,
+	(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+	 errmsg("index \"%s\" does not have default sorting behavior", index_name),
+	 errdetail("Cannot create a primary key or unique constraint using such an index."),
+	 parser_errposition(cxt->pstate, constraint->location)));
+	
+	constraint->keys = lappend(constraint->keys, makeString(attname));
+	}
+	
+	/* Close the index relation but keep the lock */
+	relation_close(index_rel, NoLock);
+	
+	index->indexOid = index_oid;
+#endif
+}
+
+/*
  * Execute ALTER TABLE/INDEX/SEQUENCE/VIEW/FOREIGN TABLE RENAME
  */
 void

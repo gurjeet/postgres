@@ -19,8 +19,14 @@
 #ifndef GENBKI_H
 #define GENBKI_H
 
+#include "c.h"
+
 /* Introduces a catalog's structure definition */
 #define CATALOG(name,oid)	typedef struct CppConcat(FormData_,name)
+
+#ifdef Q_CREATOR_RUN
+#define __JUST_EDITING__
+#endif
 
 /*
  * This is never defined; it's here only for documentation.
@@ -30,7 +36,11 @@
  * of an undefined symbol.	See also MARKNOTNULL in bootstrap.c for how this is
  * handled.
  */
+#ifdef __JUST_EDITING__
+#define CATALOG_VARLEN
+#else
 #undef CATALOG_VARLEN
+#endif
 
 /* Options that may appear after CATALOG (on the same line) */
 #define BKI_BOOTSTRAP

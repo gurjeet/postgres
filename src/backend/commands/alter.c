@@ -105,10 +105,16 @@ ExecRenameStmt(RenameStmt *stmt)
 			RenameTableSpace(stmt->subname, stmt->newname);
 			break;
 
+		case OBJECT_INDEX:
+			if (stmt->relationType == OBJECT_INDEX)
+			{
+				ReplaceIndexFileNode(stmt);
+				break;
+			}
+			/* fall through */
 		case OBJECT_TABLE:
 		case OBJECT_SEQUENCE:
 		case OBJECT_VIEW:
-		case OBJECT_INDEX:
 		case OBJECT_FOREIGN_TABLE:
 			RenameRelation(stmt);
 			break;

@@ -14,6 +14,7 @@
 #ifndef TRANSAM_H
 #define TRANSAM_H
 
+#include "c.h"
 #include "access/xlogdefs.h"
 
 
