@@ -15,7 +15,7 @@
 #define PARSE_UTILCMD_H
 
 #include "parser/parse_node.h"
-
+#include "catalog/index.h"
 
 extern List *transformCreateStmt(CreateStmt *stmt, const char *queryString);
 extern List *transformAlterTableStmt(AlterTableStmt *stmt,

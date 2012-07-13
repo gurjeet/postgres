@@ -854,4 +854,6 @@ extern int	fdatasync(int fildes);
 /* /port compatibility functions */
 #include "port.h"
 
+#define AssertCompileTime(x) extern int __compile_time_assert[(x)?1:-1] PG_USED_FOR_ASSERTS_ONLY
+
 #endif   /* C_H */

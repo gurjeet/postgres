@@ -15,7 +15,8 @@
 #define INDEX_H
 
 #include "nodes/execnodes.h"
-
+#include "parser/parse_node.h"
+#include "catalog/pg_index.h"
 
 #define DEFAULT_INDEX_TYPE	"btree"
 
@@ -100,5 +101,13 @@ extern bool reindex_relation(Oid relid, int flags);
 extern bool ReindexIsProcessingHeap(Oid heapOid);
 extern bool ReindexIsProcessingIndex(Oid indexOid);
 extern Oid	IndexGetRelation(Oid indexId, bool missing_ok);
+
+extern void CheckIndexOkayForReplacement(Relation heap_rel,
+										Oid index_oid, Relation index_rel,
+										Form_pg_index index_form,
+										bool constraint_deferrable, bool replacing_primary,
+										List **attnames,
+										ParseState *pstate, int location);
+
 
 #endif   /* INDEX_H */

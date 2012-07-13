@@ -41,6 +41,7 @@
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
+#include "commands/defrem.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
@@ -3308,4 +3309,145 @@ static void
 ResetReindexPending(void)
 {
 	pendingReindexedIndexes = NIL;
+}
+
+void
+CheckIndexOkayForReplacement(Relation heap_rel, Oid index_oid,
+							Relation index_rel, Form_pg_index index_form,
+							bool constraint_deferrable, bool replacing_primary,
+							List **attnames,
+							ParseState *pstate, int location)
+{
+	oidvector  *indclass;
+	Datum		indclassDatum;
+	bool		isnull;
+	int			i;
+	char *index_name = NameStr(index_rel->rd_rel->relname);
+
+	/* Check that it does not have an associated constraint already */
+	if (OidIsValid(get_index_constraint(index_oid)))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is already associated with a constraint",
+						index_name),
+				 parser_errposition(pstate, location)));
+
+	/* Perform validity checks on the index */
+	if (index_form->indrelid != RelationGetRelid(heap_rel))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" does not belong to table \"%s\"",
+						index_name, RelationGetRelationName(heap_rel)),
+				 parser_errposition(pstate, location)));
+
+	if (!index_form->indisvalid)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not valid", index_name),
+				 parser_errposition(pstate, location)));
+
+	if (!index_form->indisready)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("index \"%s\" is not ready", index_name),
+				 parser_errposition(pstate, location)));
+
+	if (replacing_primary && !index_form->indisunique)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is not a unique index", index_name),
+				 errdetail("Cannot create a primary key or unique constraint using such an index."),
+				 parser_errposition(pstate, location)));
+
+	if (replacing_primary && RelationGetIndexExpressions(index_rel) != NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("index \"%s\" contains expressions", index_name),
+				 errdetail("Cannot create a primary key or unique constraint using such an index."),
+				 parser_errposition(pstate, location)));
+
+	if (replacing_primary && RelationGetIndexPredicate(index_rel) != NIL)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is a partial index", index_name),
+				 errdetail("Cannot create a primary key or unique constraint using such an index."),
+				 parser_errposition(pstate, location)));
+
+	/*
+	 * It's probably unsafe to change a deferred index to non-deferred. (A
+	 * non-constraint index couldn't be deferred anyway, so this case
+	 * should never occur; no need to sweat, but let's check it.)
+	 */
+	if (replacing_primary
+		&& !index_form->indimmediate && !constraint_deferrable)
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("\"%s\" is a deferrable index", index_name),
+				 errdetail("Cannot create a non-deferrable constraint using a deferrable index."),
+				 parser_errposition(pstate, location)));
+
+	/*
+	 * Insist on it being a btree.	That's the only kind that supports
+	 * uniqueness at the moment anyway; but we must have an index that
+	 * exactly matches what you'd get from plain ADD CONSTRAINT syntax,
+	 * else dump and reload will produce a different index (breaking
+	 * pg_upgrade in particular).
+	 */
+	if (replacing_primary
+		&& index_rel->rd_rel->relam != get_am_oid(DEFAULT_INDEX_TYPE, false))
+		ereport(ERROR,
+				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+				 errmsg("index \"%s\" is not a btree", index_name),
+				 parser_errposition(pstate, location)));
+
+	/* Must get indclass the hard way */
+	indclassDatum = SysCacheGetAttr(INDEXRELID, index_rel->rd_indextuple,
+									Anum_pg_index_indclass, &isnull);
+	Assert(!isnull);
+	indclass = (oidvector *) DatumGetPointer(indclassDatum);
+
+	for (i = 0; i < index_form->indnatts; i++)
+	{
+		int16		attnum = index_form->indkey.values[i];
+		Form_pg_attribute attform;
+		char	   *attname;
+		Oid			defopclass;
+
+		/*
+		 * We shouldn't see attnum == 0 here, since we already rejected
+		 * expression indexes.	If we do, SystemAttributeDefinition will
+		 * throw an error.
+		 */
+		if (attnum > 0)
+		{
+			Assert(attnum <= heap_rel->rd_att->natts);
+			attform = heap_rel->rd_att->attrs[attnum - 1];
+		}
+		else
+			attform = SystemAttributeDefinition(attnum,
+										   heap_rel->rd_rel->relhasoids);
+
+		/*
+		 * Insist on default opclass and sort options.	While the index
+		 * would still work as a constraint with non-default settings, it
+		 * might not provide exactly the same uniqueness semantics as
+		 * you'd get from a normally-created constraint; and there's also
+		 * the dump/reload problem mentioned above.
+		 */
+		defopclass = GetDefaultOpClass(attform->atttypid,
+									   index_rel->rd_rel->relam);
+		if (indclass->values[i] != defopclass ||
+			index_rel->rd_indoption[i] != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					 errmsg("index \"%s\" does not have default sorting behavior", index_name),
+					 errdetail("Cannot create a primary key or unique constraint using such an index."),
+				 parser_errposition(pstate, location)));
+
+		if (attnames != NULL)
+		{
+			attname = pstrdup(NameStr(attform->attname));
+			*attnames = lappend(*attnames, makeString(attname));
+		}
+	}
 }

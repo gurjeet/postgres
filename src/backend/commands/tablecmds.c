@@ -2414,13 +2414,18 @@ RenameConstraint(RenameStmt *stmt)
 /*
  * Execute ALTER INDEX REPLACE WITH
  */
+
+/* If this causes a compile-time error, consider revising next function */
+AssertCompileTime(Natts_pg_index==17);
+
 void
 ReplaceIndexFileNode(RenameStmt *stmt)
 {
 	Oid				srcOid,
 					dstOid;
 	Relation		srcRel,
-					dstRel;
+					dstRel,
+					heapRel;
 	Form_pg_index	srcFrm,
 					dstFrm;
 
@@ -2494,6 +2499,52 @@ ReplaceIndexFileNode(RenameStmt *stmt)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("index \"%s\" is not ready", stmt->relation->relname)));
+
+	if (dstFrm->indnatts != srcFrm->indnatts)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("number of index columns do not match")));
+
+	if (dstFrm->indisunique != srcFrm->indisunique)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("'uniqueness' properties of indexes do not match")));
+
+	/*
+	 * We intentionally do not compare indisprimary, since someone might be
+	 * trying to replace a primary key's index-file with one from a unique
+	 * index. In fact, this is the exact reason why this function was invented.
+	 *
+	 * But we make sure that the new index is suitable to be a primary key index.
+	 */
+	heapRel = heap_open(dstFrm->indrelid, AccessExclusiveLock);
+	if (dstFrm->indisprimary)
+	{
+		/* Make sure the index is suitable to be a primary key */
+		CheckIndexOkayForReplacement(heapRel, srcOid, srcRel,
+									srcFrm, !dstFrm->indimmediate,
+									true, NULL, NULL, 0);
+	}
+
+	if (dstFrm->indisexclusion != srcFrm->indisexclusion)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("'exclusion' properties of indexes do not match")));
+
+	if (dstFrm->indimmediate != srcFrm->indimmediate)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("'deferred' properties of indexes do not match")));
+
+	/* We ignore indisclustered */
+	/* indisvalid has been checked above */
+	/* We ignore indcheckxmin, since indisvalid covers it. */
+	/* indisready has been checked above */
+
+	if (dstFrm->indimmediate != srcFrm->indimmediate)
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("'deferred' properties of indexes do not match")));
 
 #if 0
 	/* Must get indclass the hard way */
