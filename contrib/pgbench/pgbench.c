@@ -399,8 +399,77 @@ usage(void)
 		   progname, progname);
 }
 
+/*
+ * strtoint64 -- convert a string to 64-bit integer
+ *
+ * This function is a modified version of scanint8() from
+ * src/backend/utils/adt/int8.c.
+ *
+ */
+static int64
+strtoint64(const char *str)
+{
+	const char *ptr = str;
+	int64		result = 0;
+	int			sign = 1;
+
+	/*
+	 * Do our own scan, rather than relying on sscanf which might be broken
+	 * for long long.
+	 */
+
+	/* skip leading spaces */
+	while (*ptr && isspace((unsigned char) *ptr))
+		ptr++;
+
+	/* handle sign */
+	if (*ptr == '-')
+	{
+		ptr++;
+
+		/*
+		 * Do an explicit check for INT64_MIN.	Ugly though this is, it's
+		 * cleaner than trying to get the loop below to handle it portably.
+		 */
+		if (strncmp(ptr, "9223372036854775808", 19) == 0)
+		{
+			result = -INT64CONST(0x7fffffffffffffff) - 1;
+			ptr += 19;
+			goto gotdigits;
+		}
+		sign = -1;
+	}
+	else if (*ptr == '+')
+		ptr++;
+
+	/* require at least one digit */
+	if (!isdigit((unsigned char) *ptr))
+		fprintf(stderr, "invalid input syntax for integer: \"%s\"\n", str);
+
+	/* process digits */
+	while (*ptr && isdigit((unsigned char) *ptr))
+	{
+		int64		tmp = result * 10 + (*ptr++ - '0');
+
+		if ((tmp / 10) != result)		/* overflow? */
+			fprintf(stderr, "value \"%s\" is out of range for type bigint\n", str);
+		result = tmp;
+	}
+
+gotdigits:
+
+	/* allow trailing whitespace, but not other trailing chars */
+	while (*ptr != '\0' && isspace((unsigned char) *ptr))
+		ptr++;
+
+	if (*ptr != '\0')
+		fprintf(stderr, "invalid input syntax for integer: \"%s\"\n", str);
+
+	return ((sign < 0) ? -result : result);
+}
+
 /* random number generator: uniform distribution from min to max inclusive */
-static int
+static int64
 getrand(TState *thread, int min, int max)
 {
 	/*
@@ -412,7 +481,7 @@ getrand(TState *thread, int min, int max)
 	 * protected by a mutex, and therefore a bottleneck on machines with many
 	 * CPUs.
 	 */
-	return min + (int) ((max - min + 1) * pg_erand48(thread->random_state));
+	return min + (int64) ((max - min + 1) * pg_erand48(thread->random_state));
 }
 
 /* call PQexec() and exit() on failure */
@@ -956,7 +1025,7 @@ top:
 		if (commands[st->state] == NULL)
 		{
 			st->state = 0;
-			st->use_file = getrand(thread, 0, num_files - 1);
+			st->use_file = (int)getrand(thread, 0, num_files - 1);
 			commands = sql_files[st->use_file];
 		}
 	}
@@ -1076,7 +1145,7 @@ top:
 		if (pg_strcasecmp(argv[0], "setrandom") == 0)
 		{
 			char	   *var;
-			int			min,
+			int64		min,
 						max;
 			char		res[64];
 
@@ -1088,10 +1157,10 @@ top:
 					st->ecnt++;
 					return true;
 				}
-				min = atoi(var);
+				min = strtoint64(var);
 			}
 			else
-				min = atoi(argv[2]);
+				min = strtoint64(argv[2]);
 
 #ifdef NOT_USED
 			if (min < 0)
@@ -1110,10 +1179,10 @@ top:
 					st->ecnt++;
 					return true;
 				}
-				max = atoi(var);
+				max = strtoint64(var);
 			}
 			else
-				max = atoi(argv[3]);
+				max = strtoint64(argv[3]);
 
 			if (max < min)
 			{
@@ -1124,7 +1193,7 @@ top:
 
 			/*
 			 * getrand() neeeds to be able to subtract max from min and add
-			 * one the result without overflowing.	Since we know max > min,
+			 * one to the result without overflowing.	Since we know max > min,
 			 * we can detect overflow just by checking for a negative result.
 			 * But we must check both that the subtraction doesn't overflow,
 			 * and that adding one to the result doesn't overflow either.
@@ -1137,9 +1206,9 @@ top:
 			}
 
 #ifdef DEBUG
-			printf("min: %d max: %d random: %d\n", min, max, getrand(thread, min, max));
+			printf("min: " INT64_FORMAT " max: " INT64_FORMAT " random: " INT64_FORMAT "\n", min, max, getrand(thread, min, max));
 #endif
-			snprintf(res, sizeof(res), "%d", getrand(thread, min, max));
+			snprintf(res, sizeof(res), INT64_FORMAT, getrand(thread, min, max));
 
 			if (!putVariable(st, argv[0], argv[1], res))
 			{
@@ -1152,7 +1221,7 @@ top:
 		else if (pg_strcasecmp(argv[0], "set") == 0)
 		{
 			char	   *var;
-			int			ope1,
+			int64		ope1,
 						ope2;
 			char		res[64];
 
@@ -1164,13 +1233,13 @@ top:
 					st->ecnt++;
 					return true;
 				}
-				ope1 = atoi(var);
+				ope1 = strtoint64(var);
 			}
 			else
-				ope1 = atoi(argv[2]);
+				ope1 = strtoint64(argv[2]);
 
 			if (argc < 5)
-				snprintf(res, sizeof(res), "%d", ope1);
+				snprintf(res, sizeof(res), INT64_FORMAT, ope1);
 			else
 			{
 				if (*argv[4] == ':')
@@ -1181,17 +1250,17 @@ top:
 						st->ecnt++;
 						return true;
 					}
-					ope2 = atoi(var);
+					ope2 = strtoint64(var);
 				}
 				else
-					ope2 = atoi(argv[4]);
+					ope2 = strtoint64(argv[4]);
 
 				if (strcmp(argv[3], "+") == 0)
-					snprintf(res, sizeof(res), "%d", ope1 + ope2);
+					snprintf(res, sizeof(res), INT64_FORMAT, ope1 + ope2);
 				else if (strcmp(argv[3], "-") == 0)
-					snprintf(res, sizeof(res), "%d", ope1 - ope2);
+					snprintf(res, sizeof(res), INT64_FORMAT, ope1 - ope2);
 				else if (strcmp(argv[3], "*") == 0)
-					snprintf(res, sizeof(res), "%d", ope1 * ope2);
+					snprintf(res, sizeof(res), INT64_FORMAT, ope1 * ope2);
 				else if (strcmp(argv[3], "/") == 0)
 				{
 					if (ope2 == 0)
@@ -1200,7 +1269,7 @@ top:
 						st->ecnt++;
 						return true;
 					}
-					snprintf(res, sizeof(res), "%d", ope1 / ope2);
+					snprintf(res, sizeof(res), INT64_FORMAT, ope1 / ope2);
 				}
 				else
 				{
@@ -1307,6 +1376,15 @@ disconnect_all(CState *state, int length)
 static void
 init(bool is_no_vacuum)
 {
+
+/* The scale factor at/beyond which 32bit integers are incapable of storing
+ * 64bit values.
+ *
+ * Although the actual threshold is 21474, we use 20000 because it is easier to
+ * document and remember, and isn't that far away from the real threshold.
+ */
+#define SCALE_32BIT_THRESHOLD 20000
+
 	/*
 	 * Note: TPC-B requires at least 100 bytes per row, and the "filler"
 	 * fields in these table declarations were intended to comply with that.
@@ -1325,7 +1403,9 @@ init(bool is_no_vacuum)
 	struct ddlinfo DDLs[] = {
 		{
 			"pgbench_history",
-			"tid int,bid int,aid int,delta int,mtime timestamp,filler char(22)",
+			scale >= SCALE_32BIT_THRESHOLD
+				? "tid int,bid int,aid bigint,delta int,mtime timestamp,filler char(22)"
+				: "tid int,bid int,aid    int,delta int,mtime timestamp,filler char(22)",
 			0
 		},
 		{
@@ -1335,7 +1415,9 @@ init(bool is_no_vacuum)
 		},
 		{
 			"pgbench_accounts",
-			"aid int not null,bid int,abalance int,filler char(84)",
+			scale >= SCALE_32BIT_THRESHOLD
+				? "aid bigint not null,bid int,abalance int,filler char(84)"
+				: "aid    int not null,bid int,abalance int,filler char(84)",
 			1
 		},
 		{
@@ -1361,6 +1443,7 @@ init(bool is_no_vacuum)
 	PGresult   *res;
 	char		sql[256];
 	int			i;
+	int64		k;
 
 	if ((con = doConnect()) == NULL)
 		exit(1);
@@ -1430,11 +1513,11 @@ init(bool is_no_vacuum)
 	}
 	PQclear(res);
 
-	for (i = 0; i < naccounts * scale; i++)
+	for (k = 0; k < (int64)naccounts * scale; k++)
 	{
-		int			j = i + 1;
+		int64 j = k + 1;
 
-		snprintf(sql, 256, "%d\t%d\t%d\t\n", j, i / naccounts + 1, 0);
+		snprintf(sql, 256, INT64_FORMAT "\t" INT64_FORMAT "\t%d\t\n", j, k / naccounts + 1, 0);
 		if (PQputline(con, sql))
 		{
 			fprintf(stderr, "PQputline failed\n");
@@ -1442,7 +1525,7 @@ init(bool is_no_vacuum)
 		}
 
 		if (j % 100000 == 0)
-			fprintf(stderr, "%d of %d tuples (%d%%) done.\n",
+			fprintf(stderr, INT64_FORMAT " of " INT64_FORMAT " tuples (%d%%) done.\n",
 					j, naccounts * scale,
 					(int) (((int64) j * 100) / (naccounts * scale)));
 	}
