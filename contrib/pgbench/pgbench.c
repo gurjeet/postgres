@@ -470,7 +470,7 @@ gotdigits:
 
 /* random number generator: uniform distribution from min to max inclusive */
 static int64
-getrand(TState *thread, int min, int max)
+getrand(TState *thread, int64 min, int64 max)
 {
 	/*
 	 * Odd coding is so that min and max have approximately the same chance of
@@ -1526,7 +1526,7 @@ init(bool is_no_vacuum)
 
 		if (j % 100000 == 0)
 			fprintf(stderr, INT64_FORMAT " of " INT64_FORMAT " tuples (%d%%) done.\n",
-					j, naccounts * scale,
+					j, (int64)naccounts * scale,
 					(int) (((int64) j * 100) / (naccounts * scale)));
 	}
 	if (PQputline(con, "\\.\n"))
