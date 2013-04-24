@@ -2863,7 +2863,7 @@ raw_expression_tree_walker(Node *node,
 					return true;
 				if (walker(stmt->usingClause, context))
 					return true;
-				if (walker(stmt->wehereClause, context))
+				if (walker(stmt->whereClause, context))
 					return true;
 				if (walker(stmt->returningList, context))
 					return true;
