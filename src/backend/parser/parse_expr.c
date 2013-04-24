@@ -920,6 +920,14 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAnd(ParseState *pstate, A_Expr *a)
 {
+	List *exprs = NIL;
+	Node *tmp;
+
+	for (tmp = a->lexpr; IsA(A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND; 
+
+
+
+	for 
 	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
 	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
 
