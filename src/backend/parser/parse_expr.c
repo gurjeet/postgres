@@ -911,14 +911,14 @@ static Node *
 transformAExprAnd(ParseState *pstate, A_Expr *a)
 {
 	List *list = NIL;
-	Node *c;
+	ListCell *c;
 
 	Assert(a->rexpr == NULL);
 
-	foreach(c, a->lexpr)
+	foreach(c, (List*)a->lexpr)
 	{
 		A_Expr *e = (A_Expr*)lfirst(c);
-		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, e), "AND")
+		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, (Node*)e), "AND"));
 	}
 
 	return (Node *) makeBoolExpr(AND_EXPR,
@@ -930,14 +930,14 @@ static Node *
 transformAExprOr(ParseState *pstate, A_Expr *a)
 {
 	List *list = NIL;
-	Node *c;
+	ListCell *c;
 
 	Assert(a->rexpr == NULL);
 
-	foreach(c, a->lexpr)
+	foreach(c, (List*)a->lexpr)
 	{
 		A_Expr *e = (A_Expr*)lfirst(c);
-		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, e), "OR")
+		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, (Node*)e), "OR"));
 	}
 
 	return (Node *) makeBoolExpr(AND_EXPR,
