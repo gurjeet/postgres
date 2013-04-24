@@ -145,6 +145,7 @@ static void SplitColQualList(List *qualList,
 static void processCASbits(int cas_bits, int location, const char *constrType,
 			   bool *deferrable, bool *initdeferred, bool *not_valid,
 			   bool *no_inherit, core_yyscan_t yyscanner);
+static A_Expr* flatten_and_or(A_Expr_Kind aexprkind, Node *left, Node *right, int location);
 
 %}
 
@@ -13370,6 +13371,42 @@ void
 parser_init(base_yy_extra_type *yyext)
 {
 	yyext->parsetree = NIL;		/* in case grammar forgets to set it */
+}
+
+static A_Expr*
+flatten_and_or(A_Expr_Kind aexprkind, Node *left, Node *right, int location)
+{
+	List *return_list = NIL;
+	Node *return_node = NULL;
+	bool flattened = false;
+
+	Assert(aexprkind == AEXPR_AND || aexprkind == AEXPR_OR);
+
+	if (IsA(left, A_Expr) && ((A_Expr*)left)->kind == aexprkind
+		&& IsA(right, A_Expr) && ((A_Expr*)right)->kind == aexprkind)
+	{
+		A_Expr *l = left;
+		A_Expr *r = right;
+
+		makeA_Expr(aexprkind, NIL, list_concat(left->lexpr, r->lexpr), NULL, location)
+		
+		flattened = true;
+	}
+
+	if (IsA(right, A_Expr) && ((A_Expr*)right)->kind == aexprkind)
+	{
+		if (IsA(left, A_Expr))
+			list_concat(return_list)
+
+		Assert(IsA(((A_Expr*)left)->lexpr, List));
+		
+		flattened = true;
+	}
+
+	if (!flattened)
+	{
+		return makeA_Expr(aexprkind, NIL, list_make2(left, right), NULL, location);
+	}
 }
 
 /*
