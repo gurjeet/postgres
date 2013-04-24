@@ -10156,9 +10156,9 @@ a_expr:		c_expr									{ $$ = $1; }
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, NULL, @2); }
 
 			| a_expr AND a_expr
-				{ $$ = (Node *) makeA_Expr(AEXPR_AND, NIL, $1, $3, @2); }
+				{ $$ = (Node *) flatten_and_or_chain(AEXPR_AND, $1, $3, @2); }
 			| a_expr OR a_expr
-				{ $$ = (Node *) makeA_Expr(AEXPR_OR, NIL, $1, $3, @2); }
+				{ $$ = (Node *) flatten_and_or_chain(AEXPR_OR, $1, $3, @2); }
 			| NOT a_expr
 				{ $$ = (Node *) makeA_Expr(AEXPR_NOT, NIL, NULL, $2, @1); }
 
@@ -13374,39 +13374,34 @@ parser_init(base_yy_extra_type *yyext)
 }
 
 static A_Expr*
-flatten_and_or(A_Expr_Kind aexprkind, Node *left, Node *right, int location)
+flatten_and_or_chain(A_Expr_Kind aexprkind, Node *left, Node *right, int location)
 {
-	List *return_list = NIL;
-	Node *return_node = NULL;
-	bool flattened = false;
+	A_Expr *lexpr = left;
+	A_Expr *rexpr = right;
 
 	Assert(aexprkind == AEXPR_AND || aexprkind == AEXPR_OR);
+	Assert(IsA(left, A_Expr) && IsA(right, A_Expr));
 
-	if (IsA(left, A_Expr) && ((A_Expr*)left)->kind == aexprkind
-		&& IsA(right, A_Expr) && ((A_Expr*)right)->kind == aexprkind)
+	if (lexpr->kind == aexprkind && rexpr->kind == aexprkind)
 	{
-		A_Expr *l = left;
-		A_Expr *r = right;
-
-		makeA_Expr(aexprkind, NIL, list_concat(left->lexpr, r->lexpr), NULL, location)
-		
-		flattened = true;
+		return makeA_Expr(aexprkind, NIL, list_concat(left->lexpr, r->lexpr), NULL, location)
 	}
 
-	if (IsA(right, A_Expr) && ((A_Expr*)right)->kind == aexprkind)
+	if (lexpr->kind == aexprkind)
 	{
-		if (IsA(left, A_Expr))
-			list_concat(return_list)
+		lexpr->lexpr = lappend(lexpr->lexpr, rexpr);
 
-		Assert(IsA(((A_Expr*)left)->lexpr, List));
-		
-		flattened = true;
+		return lexpr;
 	}
 
-	if (!flattened)
+	if (rexpr->kind == aexprkind)
 	{
-		return makeA_Expr(aexprkind, NIL, list_make2(left, right), NULL, location);
+		rexpr->lexpr = lappend(rexpr->lexpr, lexpr);
+
+		return rexpr;
 	}
+
+	return makeA_Expr(aexprkind, NIL, list_make2(lexpr, rexpr), NULL, location);
 }
 
 /*

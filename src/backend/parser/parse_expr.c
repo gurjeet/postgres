@@ -910,28 +910,38 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAnd(ParseState *pstate, A_Expr *a)
 {
-	Node	   *lexpr = transformExpr(pstate, a->lexpr);
-	Node	   *rexpr = transformExpr(pstate, a->rexpr);
+	List *list = NIL;
+	Node *c;
 
-	lexpr = coerce_to_boolean(pstate, lexpr, "AND");
-	rexpr = coerce_to_boolean(pstate, rexpr, "AND");
+	Assert(a->rexpr == NULL);
+
+	foreach(c, a->lexpr)
+	{
+		A_Expr *e = (A_Expr*)lfirst(c);
+		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, e), "AND")
+	}
 
 	return (Node *) makeBoolExpr(AND_EXPR,
-								 list_make2(lexpr, rexpr),
+								 list,
 								 a->location);
 }
 
 static Node *
 transformAExprOr(ParseState *pstate, A_Expr *a)
 {
-	Node	   *lexpr = transformExpr(pstate, a->lexpr);
-	Node	   *rexpr = transformExpr(pstate, a->rexpr);
+	List *list = NIL;
+	Node *c;
 
-	lexpr = coerce_to_boolean(pstate, lexpr, "OR");
-	rexpr = coerce_to_boolean(pstate, rexpr, "OR");
+	Assert(a->rexpr == NULL);
 
-	return (Node *) makeBoolExpr(OR_EXPR,
-								 list_make2(lexpr, rexpr),
+	foreach(c, a->lexpr)
+	{
+		A_Expr *e = (A_Expr*)lfirst(c);
+		list = lappend(list, coerce_to_boolean(pstate, transformExpr(pstate, e), "OR")
+	}
+
+	return (Node *) makeBoolExpr(AND_EXPR,
+								 list,
 								 a->location);
 }
 
