@@ -920,14 +920,16 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAnd(ParseState *pstate, A_Expr *a)
 {
+#if 1
 	List *exprs = NIL;
 	Node *tmp;
 
-	for (tmp = a->lexpr; IsA(A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND; 
+	tmp = a->lexpr; IsA(A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND; 
 
 
 
 	for 
+#else
 	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
 	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
 
@@ -937,6 +939,7 @@ transformAExprAnd(ParseState *pstate, A_Expr *a)
 	return (Node *) makeBoolExpr(AND_EXPR,
 								 list_make2(lexpr, rexpr),
 								 a->location);
+#endif
 }
 
 static Node *
