@@ -922,13 +922,31 @@ transformAExprAnd(ParseState *pstate, A_Expr *a)
 {
 #if 1
 	List *exprs = NIL;
+	List *coerced_exprs = NIL;
+	ListCell *cell;
 	Node *tmp;
+	Node *expr;
 
-	tmp = a->lexpr; IsA(A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND; 
+	for (tmp = a->lexpr; IsA(tmp, A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND;  )
+	{
+		expr = transformExprRecurse(pstate, a->rexpr);
+		expr = coerce_to_boolean(pstate, expr, "AND");
+		exprs = lappend(exprs, rexpr);
 
+		a = a->lexpr;
+		tmp = a->lexpr;
+	}
 
+	expr = transformExprRecurse(pstate, a->lexpr);
+	expr = coerce_to_boolean(pstate, expr, "AND");
+	exprs = lappend(exprs, expr);
 
-	for 
+	expr = transformExprRecurse(pstate, a->rexpr);
+	expr = coerce_to_boolean(pstate, expr, "AND");
+	exprs = lappend(exprs, expr);
+
+	return (Node *) makeBoolExpr(AND_EXPR, exprs, a->location);
+
 #else
 	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
 	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
