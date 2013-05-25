@@ -916,6 +916,23 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 	return result;
 }
 
+/*
+ * Transform the AND/OR trees non-recursively.
+ *
+ * The parser turns a list of consecutive AND expressions into a left-deep tree.
+ *
+ * a AND b AND c
+ *
+ *      AND
+ *     /  \
+ *   AND   c
+ *  /  \
+ * a    b
+ *
+ * For very long lists, it gets deep enough that processing it recursively causes
+ * check_stack_depth() to raise error and abort the query. Hence, it is necessary
+ * that we process these trees iteratively.
+ */
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
@@ -935,8 +952,9 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		pending = list_delete_first(pending);
 
 		/*
-		 * Process all the right braches of a left-deep tree, and walk the left
-		 * links.
+		 * Follow the left links to walk the left-deep tree, and process all the
+		 * right branches. If a right branch is also the same kind of tree, then
+		 * process that that tree also right here instead of recursing.
 		 */
 		tmp = (Node*)a;
 		do {
