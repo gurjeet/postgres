@@ -965,12 +965,12 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 			 * pending list, to be processed later. This allows us to walk even
 			 * bushy trees, not just left-deep trees.
 			 */
-			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
+/*			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
 			{
 				pending = lappend(pending, a->rexpr);
 			}
 			else
-			{
+*/			{
 				expr = transformExprRecurse(pstate, a->rexpr);
 				expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
 				exprs = lappend(exprs, expr);
