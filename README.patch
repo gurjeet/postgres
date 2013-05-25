@@ -1,4 +1,4 @@
-1m.sql fails early, in transformAExprAnd().
+15k.sql fails early, in transformAExprAnd().
 10k.sql fails later, in assign_expr_collations().
 
 
