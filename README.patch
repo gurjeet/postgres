@@ -5,9 +5,9 @@
 
 A and B and C
 
-      x
+    AND
     /  \ 
-   x     C
+  AND    C
   /  \
  A    B
 

@@ -40,8 +40,7 @@ bool		Transform_null_equals = false;
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
 static Node *transformParamRef(ParseState *pstate, ParamRef *pref);
 static Node *transformAExprOp(ParseState *pstate, A_Expr *a);
-static Node *transformAExprAnd(ParseState *pstate, A_Expr *a);
-static Node *transformAExprOr(ParseState *pstate, A_Expr *a);
+static Node *transformAExprAndOr(ParseState *pstate, A_Expr *a);
 static Node *transformAExprNot(ParseState *pstate, A_Expr *a);
 static Node *transformAExprOpAny(ParseState *pstate, A_Expr *a);
 static Node *transformAExprOpAll(ParseState *pstate, A_Expr *a);
@@ -223,10 +222,10 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 						result = transformAExprOp(pstate, a);
 						break;
 					case AEXPR_AND:
-						result = transformAExprAnd(pstate, a);
+						result = transformAExprAndOr(pstate, a);
 						break;
 					case AEXPR_OR:
-						result = transformAExprOr(pstate, a);
+						result = transformAExprAndOr(pstate, a);
 						break;
 					case AEXPR_NOT:
 						result = transformAExprNot(pstate, a);
@@ -918,60 +917,57 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 }
 
 static Node *
-transformAExprAnd(ParseState *pstate, A_Expr *a)
+transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
-#if 1
-	List *exprs = NIL;
-	List *coerced_exprs = NIL;
-	ListCell *cell;
-	Node *tmp;
-	Node *expr;
+	List		   *exprs = NIL;
+	List		   *pending = NIL;
+	Node		   *expr;
+	A_Expr		   *root = a;
+	A_Expr_Kind		root_kind = a->kind;
 
-	for (tmp = a->lexpr; IsA(tmp, A_Expr) && ((A_Expr*)tmp)->kind == AEXPR_AND;  )
+	pending = lappend(pending, a);
+
+	while (list_length(pending) > 0)
 	{
-		expr = transformExprRecurse(pstate, a->rexpr);
-		expr = coerce_to_boolean(pstate, expr, "AND");
-		exprs = lappend(exprs, rexpr);
+		Node *tmp;
 
-		a = a->lexpr;
-		tmp = a->lexpr;
+		a = (A_Expr*) list_nth(pending, 0);
+		pending = list_delete_first(pending);
+
+		/*
+		 * Process all the right braches of a left-deep tree, and walk the left
+		 * links.
+		 */
+		tmp = (Node*)a;
+		do {
+			a = (A_Expr*) tmp;
+
+			/*
+			 * If the right branch is also an AND condition, append it to the
+			 * pending list, to be processed later. This allows us to walk even
+			 * bushy trees, not just left-deep trees.
+			 */
+			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
+			{
+				pending = lappend(pending, a->rexpr);
+			}
+			else
+			{
+				expr = transformExprRecurse(pstate, a->rexpr);
+				expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
+				exprs = lappend(exprs, expr);
+			}
+
+			tmp = a->lexpr;
+		} while (IsA(tmp, A_Expr) && ((A_Expr*)tmp)->kind == root_kind);
+
+		/* Now process the last left expression */
+		expr = transformExprRecurse(pstate, a->lexpr);
+		expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
+		exprs = lappend(exprs, expr);
 	}
 
-	expr = transformExprRecurse(pstate, a->lexpr);
-	expr = coerce_to_boolean(pstate, expr, "AND");
-	exprs = lappend(exprs, expr);
-
-	expr = transformExprRecurse(pstate, a->rexpr);
-	expr = coerce_to_boolean(pstate, expr, "AND");
-	exprs = lappend(exprs, expr);
-
-	return (Node *) makeBoolExpr(AND_EXPR, exprs, a->location);
-
-#else
-	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
-	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
-
-	lexpr = coerce_to_boolean(pstate, lexpr, "AND");
-	rexpr = coerce_to_boolean(pstate, rexpr, "AND");
-
-	return (Node *) makeBoolExpr(AND_EXPR,
-								 list_make2(lexpr, rexpr),
-								 a->location);
-#endif
-}
-
-static Node *
-transformAExprOr(ParseState *pstate, A_Expr *a)
-{
-	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
-	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
-
-	lexpr = coerce_to_boolean(pstate, lexpr, "OR");
-	rexpr = coerce_to_boolean(pstate, rexpr, "OR");
-
-	return (Node *) makeBoolExpr(OR_EXPR,
-								 list_make2(lexpr, rexpr),
-								 a->location);
+	return (Node *) makeBoolExpr(root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR, exprs, root->location);
 }
 
 static Node *
