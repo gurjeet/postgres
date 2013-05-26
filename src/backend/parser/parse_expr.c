@@ -954,7 +954,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		/*
 		 * Follow the left links to walk the left-deep tree, and process all the
 		 * right branches. If a right branch is also the same kind of tree, then
-		 * process that that tree also right here instead of recursing.
+		 * process that tree also right here instead of recursing.
 		 */
 		tmp = (Node*)a;
 		do {
@@ -965,15 +965,15 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 			 * pending list, to be processed later. This allows us to walk even
 			 * bushy trees, not just left-deep trees.
 			 */
-/*			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
+			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
 			{
 				pending = lappend(pending, a->rexpr);
 			}
 			else
-*/			{
+			{
 				expr = transformExprRecurse(pstate, a->rexpr);
 				expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
-				exprs = lappend(exprs, expr);
+				exprs = lcons(expr, exprs);
 			}
 
 			tmp = a->lexpr;
@@ -982,7 +982,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		/* Now process the last left expression */
 		expr = transformExprRecurse(pstate, a->lexpr);
 		expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
-		exprs = lappend(exprs, expr);
+		exprs = lcons(expr, exprs);
 	}
 
 	return (Node *) makeBoolExpr(root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR, exprs, root->location);
