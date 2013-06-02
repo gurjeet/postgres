@@ -1,0 +1,8 @@
+In havey OLTP cases, there may be some tables that can benefit from placing just
+one row per block. Eg. an 'ATM' table that lists all the ATMs of a bacnk, and
+needs to be updated for every transaction done.
+
+Having many rows on the same block may cause lock contention on the lock that is
+a backend needs to take before updaing the TID pointers at the head of the block
+even though none of the rows within that block are being contended for.
+
