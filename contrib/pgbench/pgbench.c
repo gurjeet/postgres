@@ -2139,6 +2139,7 @@ main(int argc, char **argv)
 
 	if (nclients > 1)
 	{
+		char *clientid = xmalloc(15); /* INT_MAX (id's data type) can be 10 digits long at most .*/
 		state = (CState *) xrealloc(state, sizeof(CState) * nclients);
 		memset(state + 1, 0, sizeof(CState) * (nclients - 1));
 
@@ -2153,7 +2154,15 @@ main(int argc, char **argv)
 				if (!putVariable(&state[i], "startup", state[0].variables[j].name, state[0].variables[j].value))
 					exit(1);
 			}
+
+			sprintf(clientid, "%d", i);
+			if (!putVariable(&state[i], "startup", "clientid", clientid))
+				exit(1);
 		}
+
+		sprintf(clientid, "%d", 0);
+		if (!putVariable(&state[i], "startup", "clientid", clientid))
+			exit(1);
 	}
 
 	if (debug)
