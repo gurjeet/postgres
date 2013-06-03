@@ -2161,7 +2161,7 @@ main(int argc, char **argv)
 		}
 
 		sprintf(clientid, "%d", 0);
-		if (!putVariable(&state[i], "startup", "clientid", clientid))
+		if (!putVariable(&state[0], "startup", "clientid", clientid))
 			exit(1);
 	}
 
