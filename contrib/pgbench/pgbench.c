@@ -1866,6 +1866,7 @@ main(int argc, char **argv)
 	instr_time	total_time;
 	instr_time	conn_total_time;
 	int			total_xacts;
+	char	   *clientid;
 
 	int			i;
 
@@ -2137,9 +2138,17 @@ main(int argc, char **argv)
 	 */
 	main_pid = (int) getpid();
 
+	/*
+	 * Define a client_number variable that is unique per connection. Don't add
+	 * it if the user specified one with -D
+	 */
+	if (getVariable(&state[0], "client_number") == NULL)
+		clientid = xmalloc(11); /* INT_MAX can be 10 digits long at most .*/
+	else
+		clientid = NULL;
+
 	if (nclients > 1)
 	{
-		char *clientid = xmalloc(15); /* INT_MAX (id's data type) can be 10 digits long at most .*/
 		state = (CState *) xrealloc(state, sizeof(CState) * nclients);
 		memset(state + 1, 0, sizeof(CState) * (nclients - 1));
 
@@ -2155,13 +2164,21 @@ main(int argc, char **argv)
 					exit(1);
 			}
 
-			sprintf(clientid, "%d", i);
-			if (!putVariable(&state[i], "startup", "clientid", clientid))
-				exit(1);
+			/* Define the client-id for this client */
+			if (clientid != NULL)
+			{
+				sprintf(clientid, "%d", i);
+				if (!putVariable(&state[i], "startup", "client_number", clientid))
+					exit(1);
+			}
 		}
+	}
 
+	/* Define the client-id for the first client */
+	if (clientid != NULL)
+	{
 		sprintf(clientid, "%d", 0);
-		if (!putVariable(&state[0], "startup", "clientid", clientid))
+		if (!putVariable(&state[0], "startup", "client_number", clientid))
 			exit(1);
 	}
 

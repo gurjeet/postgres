@@ -1,4 +1,4 @@
-In havey OLTP cases, there may be some tables that can benefit from placing just
+In heavy OLTP cases, there may be some tables that can benefit from placing just
 one row per block. Eg. an 'ATM' table that lists all the ATMs of a bacnk, and
 needs to be updated for every transaction done.
 

@@ -533,7 +533,10 @@ pgbench <optional> <replaceable>options</> </optional> <replaceable>dbname</>
    Variables can be set by the command-line <option>-D</> option,
    explained above, or by the meta commands explained below.
    In addition to any variables preset by <option>-D</> command-line options,
-   the variable <literal>scale</> is preset to the current scale factor.
+   the variable <literal>scale</> is automatically preset to the current scale factor,
+   and <literal>client_number</> is preset to a unique number per client; a value
+   specified for these variables using <option>-D</> takes precedence over the
+   automatic presets.
    Once set, a variable's
    value can be inserted into a SQL command by writing
    <literal>:</><replaceable>variablename</>.  When running more than
