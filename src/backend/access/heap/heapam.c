@@ -2126,6 +2126,10 @@ heap_multi_insert(Relation relation, HeapTuple *tuples, int ntuples,
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
 
+	/* Special case for fillfactor=0; allow just one tuple per page. */
+	if (saveFreeSpace == BLCKSZ)
+		saveFreeSpace = MaxHeapTupleSize;
+
 	/* Toast and set header data in all the tuples */
 	heaptuples = palloc(ntuples * sizeof(HeapTuple));
 	for (i = 0; i < ntuples; i++)

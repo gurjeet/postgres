@@ -244,6 +244,10 @@ RelationGetBufferForTuple(Relation relation, Size len,
 	saveFreeSpace = RelationGetTargetPageFreeSpace(relation,
 												   HEAP_DEFAULT_FILLFACTOR);
 
+	/* Special case for fillfactor=0; allow just one tuple per page. */
+	if (saveFreeSpace == BLCKSZ)
+		saveFreeSpace = MaxHeapTupleSize - len;
+
 	if (otherBuffer != InvalidBuffer)
 		otherBlock = BufferGetBlockNumber(otherBuffer);
 	else
@@ -384,6 +388,10 @@ RelationGetBufferForTuple(Relation relation, Size len,
 		if (len + saveFreeSpace <= pageFreeSpace)
 		{
 			/* use this page as future insert target, too */
+			/*
+			 * XXX: This doesn't make much sense if the remaining space is too
+			 * small to fit even the smallest possible tuple.
+			 * */
 			RelationSetTargetBlock(relation, targetBlock);
 			return buffer;
 		}

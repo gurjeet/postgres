@@ -104,7 +104,12 @@ heap_page_prune_opt(Relation relation, Buffer buffer, TransactionId OldestXmin)
 	 */
 	minfree = RelationGetTargetPageFreeSpace(relation,
 											 HEAP_DEFAULT_FILLFACTOR);
-	minfree = Max(minfree, BLCKSZ / 10);
+
+	/* Special case for fillfactor=0; try to keep just one live tuple per page. */
+	if (minfree == BLCKSZ)
+		minfree = MaxHeapTupleSize;
+	else
+		minfree = Max(minfree, BLCKSZ / 10);
 
 	if (PageIsFull(page) || PageGetHeapFreeSpace(page) < minfree)
 	{

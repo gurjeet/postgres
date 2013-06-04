@@ -962,8 +962,10 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 					ereport(ERROR,
 					   (errmsg("invalid value for integer option \"%s\": %s",
 							   option->gen->name, value)));
-				if (validate && (option->values.int_val < optint->min ||
-								 option->values.int_val > optint->max))
+				if (validate && (option->values.int_val < optint->min
+									|| option->values.int_val > optint->max)
+								&& !(strcmp(option->gen->name, "fillfactor") == 0
+									&& option->values.int_val == 0))
 					ereport(ERROR,
 						  (errmsg("value %s out of bounds for option \"%s\"",
 								  value, option->gen->name),

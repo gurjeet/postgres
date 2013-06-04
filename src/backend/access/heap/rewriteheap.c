@@ -597,6 +597,10 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	saveFreeSpace = RelationGetTargetPageFreeSpace(state->rs_new_rel,
 												   HEAP_DEFAULT_FILLFACTOR);
 
+	/* Special case for fillfactor=0; allow just one tuple per page. */
+	if (saveFreeSpace == BLCKSZ)
+		saveFreeSpace = MaxHeapTupleSize - len;
+
 	/* Now we can check to see if there's enough free space already. */
 	if (state->rs_buffer_valid)
 	{

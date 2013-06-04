@@ -2139,8 +2139,8 @@ main(int argc, char **argv)
 	main_pid = (int) getpid();
 
 	/*
-	 * Define a client_number variable that is unique per connection. Don't add
-	 * it if the user specified one with -D
+	 * Define a client_number variable that is unique per connection. But don't
+	 * override an explicit -D switch.
 	 */
 	if (getVariable(&state[0], "client_number") == NULL)
 		clientid = xmalloc(11); /* INT_MAX can be 10 digits long at most .*/
