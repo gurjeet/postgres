@@ -107,7 +107,7 @@ heap_page_prune_opt(Relation relation, Buffer buffer, TransactionId OldestXmin)
 
 	/* Special case for fillfactor=0; try to keep just one live tuple per page. */
 	if (minfree == BLCKSZ)
-		minfree = MaxHeapTupleSize;
+		minfree = BLCKSZ/10;
 	else
 		minfree = Max(minfree, BLCKSZ / 10);
 
