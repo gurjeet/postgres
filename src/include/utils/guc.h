@@ -307,7 +307,8 @@ extern void EmitWarningsOnPlaceholders(const char *className);
 extern const char *GetConfigOption(const char *name, bool missing_ok,
 				bool restrict_superuser);
 extern const char *GetConfigOptionResetString(const char *name);
-extern void ProcessConfigFile(GucContext context);
+extern void ProcessConfigFile_base(GucContext context, bool applychanges);
+#define ProcessConfigFile(context) ProcessConfigFile_base(context, true)
 extern void InitializeGUCOptions(void);
 extern bool SelectConfigFiles(const char *userDoption, const char *progname);
 extern void ResetAllOptions(void);

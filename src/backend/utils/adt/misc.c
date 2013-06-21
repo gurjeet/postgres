@@ -194,6 +194,21 @@ pg_reload_conf(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(true);
 }
 
+/*
+ * Test the effects of reloading postgresql.conf file's contents
+ */
+Datum
+pg_test_reload_conf(PG_FUNCTION_ARGS)
+{
+	if (!superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 (errmsg("must be superuser to test the contents of postgresql.conf file"))));
+
+	ProcessConfigFile_base(PGC_SIGHUP, false);
+
+	PG_RETURN_BOOL(true);
+}
 
 /*
  * Rotate log file

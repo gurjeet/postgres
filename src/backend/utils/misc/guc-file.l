@@ -111,7 +111,7 @@ STRING			\'([^'\\\n]|\\.|\'\')*\'
  * If an error occurs, no values will be changed.
  */
 void
-ProcessConfigFile(GucContext context)
+ProcessConfigFile_base(GucContext context, bool applychanges)
 {
 	bool		error = false;
 	bool		apply = false;
@@ -246,7 +246,7 @@ ProcessConfigFile(GucContext context)
 		/* Now we can re-apply the wired-in default (i.e., the boot_val) */
 		if (set_config_option(gconf->name, NULL,
 							  context, PGC_S_DEFAULT,
-							  GUC_ACTION_SET, true, 0) > 0)
+							  GUC_ACTION_SET, applychanges, 0) > 0)
 		{
 			/* Log the change if appropriate */
 			if (context == PGC_SIGHUP)
