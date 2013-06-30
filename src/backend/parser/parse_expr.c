@@ -941,6 +941,8 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 	Node		   *expr;
 	A_Expr		   *root = a;
 	A_Expr_Kind		root_kind = a->kind;
+	char		   *root_char = (root_kind == AEXPR_AND ? "AND" : "OR");
+	BoolExprType	root_bool_expr = (root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR);
 
 	pending = lappend(pending, a);
 
@@ -948,23 +950,22 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 	{
 		Node *tmp;
 
-		a = (A_Expr*) list_nth(pending, 0);
+		a = (A_Expr*) linitial(pending);
 		pending = list_delete_first(pending);
 
 		/*
 		 * Follow the left links to walk the left-deep tree, and process all the
-		 * right branches. If a right branch is also the same kind of tree, then
-		 * process that tree also right here instead of recursing.
+		 * right branches.xi
+		 *
+		 * If a right branch is also the same kind of tree as the root, then
+		 * append it that branch to the 'pending' list. The pending list is also
+		 * processed in this function call iteratively rather than recursing.
+		 * This allows us to process even bushy trees, not just left-deep trees.
 		 */
 		tmp = (Node*)a;
 		do {
 			a = (A_Expr*) tmp;
 
-			/*
-			 * If the right branch is also an AND condition, append it to the
-			 * pending list, to be processed later. This allows us to walk even
-			 * bushy trees, not just left-deep trees.
-			 */
 			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
 			{
 				pending = lappend(pending, a->rexpr);
@@ -972,7 +973,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 			else
 			{
 				expr = transformExprRecurse(pstate, a->rexpr);
-				expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
+				expr = coerce_to_boolean(pstate, expr, root_char);
 				exprs = lcons(expr, exprs);
 			}
 
@@ -981,11 +982,11 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 
 		/* Now process the last left expression */
 		expr = transformExprRecurse(pstate, a->lexpr);
-		expr = coerce_to_boolean(pstate, expr, root_kind == AEXPR_AND ? "AND" : "OR");
+		expr = coerce_to_boolean(pstate, expr, root_char);
 		exprs = lcons(expr, exprs);
 	}
 
-	return (Node *) makeBoolExpr(root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR, exprs, root->location);
+	return (Node *) makeBoolExpr(root_bool_expr, exprs, root->location);
 }
 
 static Node *
