@@ -958,9 +958,9 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		 * right branches.xi
 		 *
 		 * If a right branch is also the same kind of tree as the root, then
-		 * append it that branch to the 'pending' list. The pending list is also
-		 * processed in this function call iteratively rather than recursing.
-		 * This allows us to process even bushy trees, not just left-deep trees.
+		 * append it to the 'pending' list. The pending list is also processed
+		 * in this function call iteratively rather than recursing.  This allows
+		 * us to process even bushy trees, not just left-deep trees.
 		 */
 		tmp = (Node*)a;
 		do {
