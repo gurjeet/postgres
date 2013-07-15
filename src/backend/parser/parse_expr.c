@@ -929,9 +929,11 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
  *  /  \
  * a    b
  *
- * For very long lists, it gets deep enough that processing it recursively causes
- * check_stack_depth() to raise error and abort the query. Hence, it is necessary
- * that we process these trees iteratively.
+ * It does similarly for a chain of OR expressions, too.
+ *
+ * For very long lists, the tree gets deep enough that processing it recursively
+ * causes check_stack_depth() to raise error and abort the query. Hence, it is
+ * necessary that we process these trees iteratively.
  */
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
@@ -944,18 +946,12 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 	char		   *root_char = (root_kind == AEXPR_AND ? "AND" : "OR");
 	BoolExprType	root_bool_expr = (root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR);
 
-	pending = lappend(pending, a);
-
-	while (list_length(pending) > 0)
-	{
+	do {
 		Node *tmp;
-
-		a = (A_Expr*) linitial(pending);
-		pending = list_delete_first(pending);
 
 		/*
 		 * Follow the left links to walk the left-deep tree, and process all the
-		 * right branches.xi
+		 * right branches.
 		 *
 		 * If a right branch is also the same kind of tree as the root, then
 		 * append it to the 'pending' list. The pending list is also processed
@@ -984,7 +980,21 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		expr = transformExprRecurse(pstate, a->lexpr);
 		expr = coerce_to_boolean(pstate, expr, root_char);
 		exprs = lcons(expr, exprs);
-	}
+
+		/*
+		 * Now that we're done processing the edge of the left-deep tree, pop
+		 * the first element from the front of the pending list and process any
+		 * interesting nodes we found earlier.
+		 */
+		if (list_length(pending) > 0)
+		{
+			a = (A_Expr*) linitial(pending);
+			pending = list_delete_first(pending);
+		}
+		else
+			a = NULL;
+
+	} while(a != NULL);
 
 	return (Node *) makeBoolExpr(root_bool_expr, exprs, root->location);
 }
