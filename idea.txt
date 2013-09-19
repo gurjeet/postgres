@@ -1,0 +1,114 @@
+The original email sent to others for review
+============================================
+<avoiding the urge to write code before brainstorming, here's a proposal>
+
+I was reading the transam/README file to understand why it's important to reflect the commit-order of transactions in WAL, and reading associated code in xact.c when I came across the CallXactCallbacks(). That made me think if we can use that same callback mechanism to do transaction admission control as Kevin had proposed.
+
+Purpose:
+    A way to limit the number of transactions that can run concurrently, and hence prevent the decline in performance after the system has reached its capacity.
+
+Out of scope currently:
+    .) Transaction classes: Labeling transactions (or transactions from certain users) so that the DBA can apply AC-T by transaction class.
+
+    This module should not limit transactions initiated by superusers, or by maintenance operations like autovacuum-freeze.
+
+Currently the StartTransaction() does not call any callbacks, and if it is deemed dangerous to invoke callbacks in StartTransaction() then this idea is dead in the water. Also, the blocked transaction will invoke CHECK_FOR_INTERRUPTS() immediately after it is made runnable, and since that will happen in a call stack below StartTransaction(), I'd like to know if processing interrupts in StartTrasaction() is a bad idea.
+
+New GUC: transaction_limiter.limit. Type: integer. Context: PGC_SIGHUP. A value of zero or less disables the module. A value greater than max_connections effectively disables the module, but we don't do anything about it.
+
+Introduce a new enum member in XactEvent: XACT_EVENT_PRE_START (using the word 'start' instead of 'begin' because 'begin' may be confused with SQL command that starts an explicit transaction block).
+
+In StartTransaction(), before starting a transaction, call CallXactCallbacks(XACT_EVENT_PRE_START) to let the module decide if the current transaction should be blocked until appropriate.
+
+Implement the feature as a contrib module, loadable as shared_preload_libraries. At library load time it will:
+
+    .) define the GUC (described above)
+    .) reserve a semaphore (via a new function RequestAddinSemaphore() in ipci.c),
+    .) reserve shared memory for two integers.
+        -) One will be used to store the current limit in shared memory.
+            Let's call it 'current_limit'.
+        -) The other will be used to keep track of how many transactions have successfully acquired the semaphore.
+            Let's call it 'num_running'.
+    .) initialize two spinlocks; used to to guard the writes to the two counters above.
+        sl_current_limit
+        sl_num_running
+    .) register hooks for
+        XACT_EVENT_PRE_START
+        XACT_EVENT_COMMIT
+        XACT_EVENT_PREPARE
+        XACT_EVENT_ABORT
+
+When called for the first time, the pre-start hook will unlock the semaphore enough times to let 'limit' number of transactions acquire the semaphore.
+
+    The hook for XACT_EVENT_PRE_START will acquire the semaphore and the rest of the hooks will release the semaphore. Every semaphore acquire is accompanied by increment of the num_running counter, and release of the semaphore is accompanied by decrementing the num_running counter (exception to this rule described below).
+
+    To maintain sanity in the system, we won't limit the number transactions based on the GUC, at least not directly, because different backends may have differerent notions of what's the current value of the GUC, as the backends process the postgresql.conf file at their own convenience. So the module will expose a superuser function to apply the current value of the GUC to the shared variable current_limit, and the hooks will honor the value in this shared variable as the limit. With this arrangement, here's what the DBA needs to do to change the current_limit:
+
+    .) Change the GUC in postgresql.conf
+    .) Send reload/SIGHUP to the postmaster
+    .) Invoke the function from SQL to persist the GUC value into current_limit.
+
+    Looks cumbersome; got a better idea?
+
+    Another option is to expose a function which takes an integer and sets that as the shared variable value directly instead of applying the current value of the GUC. The advantage of the previous variant, having the function depend on the value of GUC, is that the value is read from the file, and the same value will be used even after database restarts. Maybe we can provide both the variants, and emit a warning/notice from the second one that this value will be lost on restart.
+
+    To justify the need for instant communication of the limit to backends, consider that a client can submit a long list of commands in one go, which may start and end many transactions, not honoring the GUC change ASAP may limit the value of this feature when it might be most needed: when the system is already heavily loaded by some such client.
+
+    When current_limit is being changed, guarded by a spinlock sl_current_limit, we record the difference between the previous and current values. Outside the spinlock, if the value was increased, we perform unlock operations on the semaphore equivalent to the difference recorded earlier. This will allow increase in number of transactions that can run concurrently.
+
+    When decreasing the current_limit, we cannot perform lock operations on semahore right there without risking blocking on the semaphore. We instead choose to wait out the currently running transactions and not let any new transaction start until the num_running is below current_limit. We do so by not unlocking the semaphore at end of transactions if the num_running is higher than than or equal to current_limit.
+
+Here's the pseudo-code I have in mind.
+
+_PG_init:
+    Reserve shared memory and semaphore.
+    Install shmem_startup_hook and allocate/initialize shared_memory, semaphore etc. in that hook.
+
+fn_hook_start_transaction:
+    if (module_enabled)
+        lock(limiter_sema)
+        sema_was_locked = true; // backend-local variable
+
+    acquire(sl_num_running)
+    ++ num_running;
+    release(sl_num_running)
+
+    if sema_was_locked -- We my have been blocked off for long; process signals.
+        CHECK_FOR_INTERRUPTS()
+
+fn_hook_end_transaction:
+    acquire(sl_num_running)
+    -- num_running;
+    unlock_needed = (num_running < current_limit)
+    release(sl_num_running)
+
+    if sema_was_locked && unlock_needed
+        unlock(limiter_sema)
+        sema_was_locked = false
+
+fn_set_current_limit:
+    acquire(sl_num_running)
+    acquire(sl_current_limit)
+    prev_limit = current_limit;
+    current_limit = new_value;
+    diff = current_limit - prev_limit;
+    release(sl_current_limit)
+    release(sl_num_running)
+
+    if diff > 0
+        for i = 0; i < diff; ++i
+            unlock(limiter_sema)
+
+    I had thought of a case where we needed to avoid transactions decrementing the num_running count while current_limit is being changed, but I can't remember that case anymore, or probably I was being over-cautious then. The use of sl_num_running in fn_set_current_limit seems wasteful to me now.
+
+Miscellaneous:
+
+Why use bare semaphores instead of an existing lock construct? Spinlocks are not suitable because they are not supposed to be held for more than a few instructions. LWLocks have a mutex-like behaviour, and more importantly, acquiring an LWLock causes the backend to ignore query-cancel/die signals, and we don't want this module to make backends miss signals, because the transactions may end up being blocked for a long time. Regular, heavyweight, locks are not suitable because they have transaction semantics, and they are primarily used for locking on database objects.
+
+Ideally we would want FIFO behaviour from the semaphore, so that the oldest waiting transaction gets the semaphore, when available, but am not sure if all the ports of PGSemaphore provide that behaviour.
+
+Coping with shutdown: I don't think we need to do anything special for shutdown since as the currently running transactions leave, the waiting transactions would check the interrupts immediately upon acquiring the semaphore and hence honor the shutdown signal from postmaster.
+
+Should we make the backends publish a new state via set_ps_display() and/or update statistics via pgstat_report_activity()? I don't think we need to, but others may differ. Do we want to report it some other way so that it reflects the waiting state in pg_stats_activity view?
+
+PS: I'm glad I wrote this proposal rather than writing code. It took roughly 3 days of self-debate for many decisions here, but I think it was worth it, as I learned a few new things and probably reduced many review roundtrips.
