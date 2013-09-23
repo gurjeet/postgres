@@ -1691,6 +1691,8 @@ StartTransaction(void)
 		elog(WARNING, "StartTransaction while in %s state",
 			 TransStateAsString(s->state));
 
+	CallXactCallbacks(XACT_EVENT_PRE_START);
+
 	/*
 	 * set the current transaction state information appropriately during
 	 * start processing

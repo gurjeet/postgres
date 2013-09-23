@@ -43,6 +43,7 @@
 shmem_startup_hook_type shmem_startup_hook = NULL;
 
 static Size total_addin_request = 0;
+static int total_addin_sema_request = 0;
 static bool addin_request_allowed = true;
 
 
@@ -63,6 +64,21 @@ RequestAddinShmemSpace(Size size)
 	if (IsUnderPostmaster || !addin_request_allowed)
 		return;					/* too late */
 	total_addin_request = add_size(total_addin_request, size);
+}
+
+/*
+ * RequestAddinSemaphores
+ *		Request semaphores for the use of Addins (extensiions).
+ *
+ * The rules of when this function can be invoked as the same as described with
+ * RequestAddinShmemSpace().
+ */
+void
+RequestAddinSemaphores(int num)
+{
+	if (IsUnderPostmaster || !addin_request_allowed)
+		return;					/* too late */
+	total_addin_sema_request += total_addin_sema_request;
 }
 
 
@@ -153,6 +169,7 @@ CreateSharedMemoryAndSemaphores(bool makePrivate, int port)
 		 */
 		numSemas = ProcGlobalSemas();
 		numSemas += SpinlockSemas();
+		numSemas += total_addin_sema_request;
 		PGReserveSemaphores(numSemas, port);
 	}
 	else

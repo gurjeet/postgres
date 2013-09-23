@@ -45,6 +45,7 @@ extern Size mul_size(Size s1, Size s2);
 
 /* ipci.c */
 extern void RequestAddinShmemSpace(Size size);
+extern void RequestAddinSemaphores(int num);
 
 /* size constants for the shmem index table */
  /* max size of data structure string name */

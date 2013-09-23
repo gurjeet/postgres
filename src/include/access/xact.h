@@ -78,7 +78,8 @@ typedef enum
 	XACT_EVENT_ABORT,
 	XACT_EVENT_PREPARE,
 	XACT_EVENT_PRE_COMMIT,
-	XACT_EVENT_PRE_PREPARE
+	XACT_EVENT_PRE_PREPARE,
+	XACT_EVENT_PRE_START
 } XactEvent;
 
 typedef void (*XactCallback) (XactEvent event, void *arg);

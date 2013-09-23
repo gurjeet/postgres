@@ -1,7 +1,8 @@
 # The PostgreSQL make files exploit features of GNU make that other
+
 # makes do not have. Because it is a common mistake for users to try
-# to build Postgres with a different make, we have this make file
-# that, as a service, will look for a GNU make and invoke it, or show
+# to build Postgres with a different make, we have this make files
+# that, as a service, will look for a GNU make and invoke it, or sho
 # an error message if none could be found.
 
 # If the user were using GNU make now, this file would not get used
