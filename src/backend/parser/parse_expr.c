@@ -2489,10 +2489,6 @@ make_row_comparison_op(ParseState *pstate, List *opname,
 	/*
 	 * For = and <> cases, we just combine the pairwise operators with AND or
 	 * OR respectively.
-	 *
-	 * Note: this is presently the only place where the parser generates
-	 * BoolExpr with more than two arguments.  Should be OK since the rest of
-	 * the system thinks BoolExpr is N-argument anyway.
 	 */
 	if (rctype == ROWCOMPARE_EQ)
 		return (Node *) makeBoolExpr(AND_EXPR, opexprs, location);
