@@ -937,7 +937,7 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
-#define PROCESS_BUSHY_TREES 0
+#define PROCESS_BUSHY_TREES 1
 	List		   *exprs = NIL;
 #if PROCESS_BUSHY_TREES
 	List		   *pending = NIL;
@@ -946,20 +946,23 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 	A_Expr		   *root = a;
 	A_Expr_Kind		root_kind = a->kind;
 	char		   *root_name = (root_kind == AEXPR_AND ? "AND" : "OR");
-	BoolExprType	root_bool_expr_type = (root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR);
+	BoolExprType	root_expr_type = (root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR);
 
 	do {
 		Node *tmp;
 
 		/*
 		 * Follow the left links to walk the left-deep tree, and process all the
-		 * right branches.
+		 * right branches. We traverse down the left branch as long as we find
+		 * an unbroken chain of node types that match the root node. Then we
+		 * stop and process the rest of the tree in normal recursive manner.
 #if PROCESS_BUSHY_TREES
 		 *
 		 * If a right branch is also the same kind of tree as the root, then
 		 * append it to the 'pending' list. The pending list is also processed
 		 * in this function call iteratively rather than recursively.  This
-		 * allows us to process even bushy trees, not just left-deep trees.
+		 * allows us to process bushy and even right-deep trees, not just
+		 * left-deep trees.
 #endif
 		 */
 		tmp = (Node*)a;
@@ -976,13 +979,18 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 			{
 				expr = transformExprRecurse(pstate, a->rexpr);
 				expr = coerce_to_boolean(pstate, expr, root_name);
+				/*
+				 * Use lcons instead of lappend to retain the order of
+				 * processing of right branches close to the way it was in the
+				 * case of recursive processing.
+				 */
 				exprs = lcons(expr, exprs);
 			}
 
 			tmp = a->lexpr;
 		} while (IsA(tmp, A_Expr) && ((A_Expr*)tmp)->kind == root_kind);
 
-		/* Now process the last left expression */
+		/* Now process the node in left branch that broke our chain. */
 		expr = transformExprRecurse(pstate, a->lexpr);
 		expr = coerce_to_boolean(pstate, expr, root_name);
 		exprs = lcons(expr, exprs);
@@ -1004,7 +1012,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 
 	} while(a != NULL);
 
-	return (Node *) makeBoolExpr(root_bool_expr_type, exprs, root->location);
+	return (Node *) makeBoolExpr(root_expr_type, exprs, root->location);
 }
 
 static Node *
