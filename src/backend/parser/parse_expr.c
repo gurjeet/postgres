@@ -937,7 +937,7 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
-#define PROCESS_BUSHY_TREES 0
+#define PROCESS_BUSHY_TREES 1
 	List		   *exprs = NIL;
 #if PROCESS_BUSHY_TREES
 	List		   *pending = NIL;
