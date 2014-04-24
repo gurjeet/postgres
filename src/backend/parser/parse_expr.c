@@ -937,7 +937,7 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
-#define PROCESS_BUSHY_TREES 1
+#define PROCESS_BUSHY_TREES 0
 	List		   *exprs = NIL;
 #if PROCESS_BUSHY_TREES
 	List		   *pending = NIL;
@@ -966,13 +966,13 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		do {
 			a = (A_Expr*) tmp;
 
+#if PROCESS_BUSHY_TREES
 			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
 			{
-#if PROCESS_BUSHY_TREES
 				pending = lappend(pending, a->rexpr);
-#endif
 			}
 			else
+#endif
 			{
 				expr = transformExprRecurse(pstate, a->rexpr);
 				expr = coerce_to_boolean(pstate, expr, root_name);
