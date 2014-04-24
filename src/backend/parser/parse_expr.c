@@ -937,8 +937,11 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 static Node *
 transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
+#define PROCESS_BUSHY_TREES 0
 	List		   *exprs = NIL;
+#if PROCESS_BUSHY_TREES
 	List		   *pending = NIL;
+#endif
 	Node		   *expr;
 	A_Expr		   *root = a;
 	A_Expr_Kind		root_kind = a->kind;
@@ -951,11 +954,13 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		/*
 		 * Follow the left links to walk the left-deep tree, and process all the
 		 * right branches.
+#if PROCESS_BUSHY_TREES
 		 *
 		 * If a right branch is also the same kind of tree as the root, then
 		 * append it to the 'pending' list. The pending list is also processed
 		 * in this function call iteratively rather than recursively.  This
 		 * allows us to process even bushy trees, not just left-deep trees.
+#endif
 		 */
 		tmp = (Node*)a;
 		do {
@@ -963,7 +968,9 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 
 			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
 			{
+#if PROCESS_BUSHY_TREES
 				pending = lappend(pending, a->rexpr);
+#endif
 			}
 			else
 			{
@@ -980,6 +987,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		expr = coerce_to_boolean(pstate, expr, root_name);
 		exprs = lcons(expr, exprs);
 
+#if PROCESS_BUSHY_TREES
         /*
 		 * Now that we're done processing the edge of the left-deep tree, pop
 		 * the first element from the front of the pending list and process any
@@ -991,6 +999,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 			pending = list_delete_first(pending);
 		}
 		else
+#endif
 			a = NULL;
 
 	} while(a != NULL);
