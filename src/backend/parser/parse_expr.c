@@ -41,8 +41,7 @@ bool		Transform_null_equals = false;
 static Node *transformExprRecurse(ParseState *pstate, Node *expr);
 static Node *transformParamRef(ParseState *pstate, ParamRef *pref);
 static Node *transformAExprOp(ParseState *pstate, A_Expr *a);
-static Node *transformAExprAnd(ParseState *pstate, A_Expr *a);
-static Node *transformAExprOr(ParseState *pstate, A_Expr *a);
+static Node *transformAExprAndOr(ParseState *pstate, A_Expr *a);
 static Node *transformAExprNot(ParseState *pstate, A_Expr *a);
 static Node *transformAExprOpAny(ParseState *pstate, A_Expr *a);
 static Node *transformAExprOpAll(ParseState *pstate, A_Expr *a);
@@ -224,10 +223,10 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 						result = transformAExprOp(pstate, a);
 						break;
 					case AEXPR_AND:
-						result = transformAExprAnd(pstate, a);
+						result = transformAExprAndOr(pstate, a);
 						break;
 					case AEXPR_OR:
-						result = transformAExprOr(pstate, a);
+						result = transformAExprAndOr(pstate, a);
 						break;
 					case AEXPR_NOT:
 						result = transformAExprNot(pstate, a);
@@ -918,32 +917,85 @@ transformAExprOp(ParseState *pstate, A_Expr *a)
 	return result;
 }
 
+/*
+ * Transform the AND/OR trees non-recursively.
+ *
+ * The parser turns a list of consecutive AND expressions into a left-deep tree.
+ *
+ * a AND b AND c
+ *
+ *      AND
+ *     /  \
+ *   AND   c
+ *  /  \
+ * a    b
+ *
+ * For very long lists, it gets deep enough that processing it recursively causes
+ * check_stack_depth() to raise error and abort the query. Hence, it is necessary
+ * that we process these trees iteratively.
+ */
 static Node *
-transformAExprAnd(ParseState *pstate, A_Expr *a)
+transformAExprAndOr(ParseState *pstate, A_Expr *a)
 {
-	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
-	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
+	List		   *exprs = NIL;
+	List		   *pending = NIL;
+	Node		   *expr;
+	A_Expr		   *root = a;
+	A_Expr_Kind		root_kind = a->kind;
+	char		   *root_name = (root_kind == AEXPR_AND ? "AND" : "OR");
+	BoolExprType	root_bool_expr_type = (root_kind == AEXPR_AND ? AND_EXPR : OR_EXPR);
 
-	lexpr = coerce_to_boolean(pstate, lexpr, "AND");
-	rexpr = coerce_to_boolean(pstate, rexpr, "AND");
+	do {
+		Node *tmp;
 
-	return (Node *) makeBoolExpr(AND_EXPR,
-								 list_make2(lexpr, rexpr),
-								 a->location);
-}
+		/*
+		 * Follow the left links to walk the left-deep tree, and process all the
+		 * right branches.
+		 *
+		 * If a right branch is also the same kind of tree as the root, then
+		 * append it to the 'pending' list. The pending list is also processed
+		 * in this function call iteratively rather than recursively.  This
+		 * allows us to process even bushy trees, not just left-deep trees.
+		 */
+		tmp = (Node*)a;
+		do {
+			a = (A_Expr*) tmp;
 
-static Node *
-transformAExprOr(ParseState *pstate, A_Expr *a)
-{
-	Node	   *lexpr = transformExprRecurse(pstate, a->lexpr);
-	Node	   *rexpr = transformExprRecurse(pstate, a->rexpr);
+			if (IsA(a->rexpr, A_Expr) && ((A_Expr*)a->rexpr)->kind == root_kind)
+			{
+				pending = lappend(pending, a->rexpr);
+			}
+			else
+			{
+				expr = transformExprRecurse(pstate, a->rexpr);
+				expr = coerce_to_boolean(pstate, expr, root_name);
+				exprs = lcons(expr, exprs);
+			}
 
-	lexpr = coerce_to_boolean(pstate, lexpr, "OR");
-	rexpr = coerce_to_boolean(pstate, rexpr, "OR");
+			tmp = a->lexpr;
+		} while (IsA(tmp, A_Expr) && ((A_Expr*)tmp)->kind == root_kind);
 
-	return (Node *) makeBoolExpr(OR_EXPR,
-								 list_make2(lexpr, rexpr),
-								 a->location);
+		/* Now process the last left expression */
+		expr = transformExprRecurse(pstate, a->lexpr);
+		expr = coerce_to_boolean(pstate, expr, root_name);
+		exprs = lcons(expr, exprs);
+
+        /*
+		 * Now that we're done processing the edge of the left-deep tree, pop
+		 * the first element from the front of the pending list and process any
+		 * interesting nodes we found earlier.
+		 */
+		if (list_length(pending) > 0)
+		{
+			a = (A_Expr*) linitial(pending);
+			pending = list_delete_first(pending);
+		}
+		else
+			a = NULL;
+
+	} while(a != NULL);
+
+	return (Node *) makeBoolExpr(root_bool_expr_type, exprs, root->location);
 }
 
 static Node *
