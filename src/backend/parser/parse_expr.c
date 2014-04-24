@@ -988,7 +988,7 @@ transformAExprAndOr(ParseState *pstate, A_Expr *a)
 		exprs = lcons(expr, exprs);
 
 #if PROCESS_BUSHY_TREES
-        /*
+		/*
 		 * Now that we're done processing the edge of the left-deep tree, pop
 		 * the first element from the front of the pending list and process any
 		 * interesting nodes we found earlier.
