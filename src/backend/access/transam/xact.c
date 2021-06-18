@@ -714,6 +714,22 @@ AssignTransactionId(TransactionState s)
 			TopTransactionStateData.didLogXid = true;
 		}
 	}
+
+	// NOTIFY FrontEnd, if it wants to know the top transaction's ID.
+	if (!IsSubxact && notify_xid)
+	{
+		char *xidStr;
+		TransactionState p = s;
+
+		// Should we Assert(!IsParallelWorker()) here?
+
+		while (p->parent != NULL)
+			p = p->parent;
+
+		xidStr = FullTransactionIdToStr(p->fullTransactionId);
+
+		NotifyMyFrontEnd("top-xid", xidStr, MyProcPid);
+	}
 }
 
 /*
