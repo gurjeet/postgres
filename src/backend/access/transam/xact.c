@@ -6024,6 +6024,7 @@ xact_redo(XLogReaderState *record)
 	}
 	else if (info == XLOG_XACT_COMMIT_PREPARED)
 	{
+        xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
 		xl_xact_parsed_commit parsed;
 
 		ParseCommitRecord(XLogRecGetInfo(record), xlrec, &parsed);
