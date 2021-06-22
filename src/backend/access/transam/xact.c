@@ -67,6 +67,9 @@
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
+#include "utils/xid8.h"
+
+extern char * FullTransactionIdToStr(FullTransactionId fxid);
 
 /*
  *	User-tweakable parameters
@@ -106,6 +109,7 @@ bool		bsysscan = false;
  *
  * XactTopFullTransactionId stores the XID of our toplevel transaction, which
  * will be the same as TopTransactionStateData.fullTransactionId in an
+ * ordinary backend; but in a parallel backend, which does not have the entire
  * ordinary backend; but in a parallel backend, which does not have the entire
  * transaction state, it will instead be copied from the backend that started
  * the parallel operation.
@@ -716,19 +720,18 @@ AssignTransactionId(TransactionState s)
 	}
 
 	// NOTIFY FrontEnd, if it wants to know the top transaction's ID.
-	if (!IsSubxact && notify_xid)
+	if (!isSubXact && notify_xid)
 	{
 		char *xidStr;
-		TransactionState p = s;
+
+        Assert(s->parent == NULL);
 
 		// Should we Assert(!IsParallelWorker()) here?
 
-		while (p->parent != NULL)
-			p = p->parent;
-
-		xidStr = FullTransactionIdToStr(p->fullTransactionId);
+		xidStr = FullTransactionIdToStr(s->fullTransactionId);
 
 		NotifyMyFrontEnd("top-xid", xidStr, MyProcPid);
+        pfree(xidStr);
 	}
 }
 
@@ -6021,7 +6024,6 @@ xact_redo(XLogReaderState *record)
 	}
 	else if (info == XLOG_XACT_COMMIT_PREPARED)
 	{
-		xl_xact_commit *xlrec = (xl_xact_commit *) XLogRecGetData(record);
 		xl_xact_parsed_commit parsed;
 
 		ParseCommitRecord(XLogRecGetInfo(record), xlrec, &parsed);

@@ -162,7 +162,7 @@ xid8in(PG_FUNCTION_ARGS)
 }
 
 char *
-FullTransactionIdToStr(xid8 fxid)
+FullTransactionIdToStr(FullTransactionId fxid)
 {
 	char	   *result = (char *) palloc(21);
 	snprintf(result, 21, UINT64_FORMAT, U64FromFullTransactionId(fxid));
