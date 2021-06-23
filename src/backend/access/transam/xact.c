@@ -68,7 +68,7 @@
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
 
-extern char * FullTransactionIdToStr(FullTransactionId fxid);
+extern char *FullTransactionIdToStr(FullTransactionId fxid);
 
 /*
  *	User-tweakable parameters
