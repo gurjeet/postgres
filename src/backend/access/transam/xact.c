@@ -67,7 +67,6 @@
 #include "utils/snapmgr.h"
 #include "utils/timeout.h"
 #include "utils/timestamp.h"
-#include "utils/xid8.h"
 
 extern char * FullTransactionIdToStr(FullTransactionId fxid);
 
@@ -720,7 +719,7 @@ AssignTransactionId(TransactionState s)
 	}
 
 	// NOTIFY FrontEnd, if it wants to know the top transaction's ID.
-	if (!isSubXact && notify_xid)
+	if (!isSubXact && listen_transaction_id)
 	{
 		char *xidStr;
 
@@ -730,7 +729,7 @@ AssignTransactionId(TransactionState s)
 
 		xidStr = FullTransactionIdToStr(s->fullTransactionId);
 
-		NotifyMyFrontEnd("top-xid", xidStr, MyProcPid);
+		NotifyMyFrontEnd("_my_transaction_id", xidStr, MyProcPid);
         pfree(xidStr);
 	}
 }

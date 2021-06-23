@@ -947,18 +947,18 @@ static const unit_conversion time_unit_conversion_table[] =
  *	  variable_is_guc_list_quote() in src/bin/pg_dump/dumputils.c.
  */
 
-bool notify_xid = false;
+bool listen_transaction_id = false;
 
 /******** option records follow ********/
 
 static struct config_bool ConfigureNamesBool[] =
 {
 	{
-		{"notify_xid", PGC_USERSET, UNGROUPED,
+		{"listen_transaction_id", PGC_USERSET, UNGROUPED,
 			gettext_noop("Emit top-level transaction ID on transaction start."),
 			NULL
 		},
-		&notify_xid,
+		&listen_transaction_id,
 		false,
 		NULL, NULL, NULL
 	},
